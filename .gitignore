@@ -3,7 +3,6 @@
 /checkouts
 profiles.clj
 pom.xml
-pom.xml.asc
 *.jar
 *.class
 /.lein-*
@@ -11,3 +10,5 @@ pom.xml.asc
 /.prepl-port
 .hgignore
 .hg/
+.lsp/
+.clj-kondo/
