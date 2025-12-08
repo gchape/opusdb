@@ -16,8 +16,6 @@
             (int)))))
 
 (definterface IPage
-  (^String asString [])
-
   (^java.nio.ByteBuffer rewind [])
 
   (^short getShort [^int offset])
@@ -40,9 +38,6 @@
 
 (defrecord Page [^ByteBuffer bb ^Charset charset]
   IPage
-  (asString [_]
-    (do (.rewind bb) (String. (.array bb) charset)))
-
   (rewind [_]
     (do (.rewind bb) bb))
 
@@ -101,8 +96,8 @@
 
 (defmethod make-page (class
                       (byte-array 0))
-  [b]
+  [byte-arr]
   "Creates a new Page by wrapping an existing byte array.
   Uses US-ASCII charset for string encoding."
-  (Page. (ByteBuffer/wrap b)
+  (Page. (ByteBuffer/wrap byte-arr)
          charset))

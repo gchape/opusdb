@@ -43,14 +43,14 @@
     (let [fm (file/make-file-mngr test-db-path test-block-size)
           block (.append fm "test.db")]
       (is (= "test.db" (:file-name block)))
-      (is (= 0 (:block-id block)))))
+      (is (= 0 (:blockn block)))))
 
   (testing "appends multiple blocks"
     (let [fm (file/make-file-mngr test-db-path test-block-size)
           b1 (.append fm "test.db")
           b2 (.append fm "test.db")
           b3 (.append fm "test.db")
-          actual (map :block-id [b1 b2 b3])]
+          actual (map :blockn [b1 b2 b3])]
       (is (= [1 2 3] actual))))
 
   (testing "appends to different files"
@@ -59,8 +59,8 @@
           b2 (.append fm "file2.db")]
       (is (= "file1.db" (:file-name b1)))
       (is (= "file2.db" (:file-name b2)))
-      (is (= 0 (:block-id b1)))
-      (is (= 0 (:block-id b2))))))
+      (is (= 0 (:blockn b1)))
+      (is (= 0 (:blockn b2))))))
 
 (deftest test-write-and-read
   (testing "single block"
@@ -133,15 +133,15 @@
     (let [fm (file/make-file-mngr test-db-path test-block-size)
           _ (.append fm "test.db")
           buf (ByteBuffer/allocate test-block-size)]
-      (.readBlock fm {:file-name "test.db" :block-id 999} buf)
+      (.readBlock fm {:file-name "test.db" :blockn 999} buf)
       (.rewind buf)
       (is (= 0 (.get buf)))))
 
-  (testing "nil block-id throws"
+  (testing "nil blockn throws"
     (let [fm (file/make-file-mngr test-db-path test-block-size)
           buf (ByteBuffer/allocate test-block-size)]
       (is (thrown? Exception
-                   (.writeBlock fm {:file-name "test.db" :block-id nil} buf))))))
+                   (.writeBlock fm {:file-name "test.db" :blockn nil} buf))))))
 
 (deftest test-block-alignment
   (testing "blocks aligned correctly"

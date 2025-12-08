@@ -1,33 +1,39 @@
 (ns opusdb.lru
   (:import [java.util LinkedHashMap]))
 
-(defn make-lru
+(defn make-lru-cache
   ([size]
-   (make-lru size nil))
+   (make-lru-cache size nil))
   ([size eviction-fn]
    (let [lock (Object.)]
      (proxy [LinkedHashMap] [size 0.75 true]
        (removeEldestEntry [^java.util.Map$Entry entry]
-         (if (> (.size this) size)
-           (if (nil? eviction-fn)
-             true
-             (try
-               (eviction-fn (.getKey entry) (.getValue entry))
-               (catch Exception e
-                 (println "Error during eviction:" (.getMessage e)))))
-           false))
+         (let [^LinkedHashMap this this]
+           (if (> (.size this) size)
+             (if (not (nil? eviction-fn))
+               (try
+                 (eviction-fn (.getKey entry) (.getValue entry))
+                 (catch Exception e
+                   (println "Error during eviction:" (.getMessage e))))
+               true)
+             false)))
        (get [key]
          (locking lock
-           (proxy-super get key)))
+           (let [^LinkedHashMap this this]
+             (proxy-super get key))))
        (put [key value]
          (locking lock
-           (proxy-super put key value)))
+           (let [^LinkedHashMap this this]
+             (proxy-super put key value))))
        (remove [key]
          (locking lock
-           (proxy-super remove key)))
+           (let [^LinkedHashMap this this]
+             (proxy-super remove key))))
        (containsKey [key]
          (locking lock
-           (proxy-super containsKey key)))
+           (let [^LinkedHashMap this this]
+             (proxy-super containsKey key))))
        (clear []
          (locking lock
-           (proxy-super clear)))))))
+           (let [^LinkedHashMap this this]
+             (proxy-super clear))))))))
