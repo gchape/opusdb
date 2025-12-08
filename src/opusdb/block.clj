@@ -6,12 +6,22 @@
 
 (defrecord Block [^String file, ^int block]
   IBlock
-  (fileName [this]
-    "Returns the file name associated with the block."
-    (:file this))
-  (blockNum [this]
-    "Returns the block number of this block."
-    (:block this))
+  (fileName [_]
+    file)
+  (blockNum [_]
+    block)
   Object
-  (toString [this]
-    (str "[file " (:file this) ", " "block " (:block this) "]")))
+  (toString [_]
+    (str "[file " file ", " "block " block "]")))
+
+(defn make-block
+  "Creates a new Block with the specified file name and block number.
+  
+  Arguments:
+    file  - The name of the file containing this block
+    block - The block number within the file
+  
+  Returns:
+    A Block record representing the file location"
+  [^String file ^long block]
+  (Block. file block))
