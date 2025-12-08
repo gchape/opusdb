@@ -16,6 +16,10 @@
             (int)))))
 
 (definterface IPage
+  (^String asString [])
+
+  (^java.nio.ByteBuffer rewind [])
+
   (^short getShort [^int offset])
   (^void setShort [^int offset ^short n])
 
@@ -34,28 +38,38 @@
   (^String getString [^int offset])
   (^void setString [^int offset ^String s]))
 
-(definterface IBuffer
-  (^void rewind []))
-
 (defrecord Page [^ByteBuffer bb ^Charset charset]
-  IBuffer
-  (rewind [_] (.rewind bb))
-
   IPage
-  (getShort [_ offset] (.getShort bb offset))
-  (setShort [_ offset n] (.putShort bb offset n))
+  (asString [_]
+    (do (.rewind bb) (String. (.array bb) charset)))
 
-  (getInt [_ offset] (.getInt bb offset))
-  (setInt [_ offset n] (.putInt bb offset n))
+  (rewind [_]
+    (do (.rewind bb) bb))
 
-  (getLong [_ offset] (.getLong bb offset))
-  (setLong [_ offset l] (.putLong bb offset l))
+  (getShort [_ offset]
+    (.getShort bb offset))
+  (setShort [_ offset n]
+    (.putShort bb offset n))
 
-  (getFloat [_ offset] (.getFloat bb offset))
-  (setFloat [_ offset f] (.putFloat bb offset f))
+  (getInt [_ offset]
+    (.getInt bb offset))
+  (setInt [_ offset n]
+    (.putInt bb offset n))
 
-  (getDouble [_ offset] (.getDouble bb offset))
-  (setDouble [_ offset d] (.putDouble bb offset d))
+  (getLong [_ offset]
+    (.getLong bb offset))
+  (setLong [_ offset l]
+    (.putLong bb offset l))
+
+  (getFloat [_ offset]
+    (.getFloat bb offset))
+  (setFloat [_ offset f]
+    (.putFloat bb offset f))
+
+  (getDouble [_ offset]
+    (.getDouble bb offset))
+  (setDouble [_ offset d]
+    (.putDouble bb offset d))
 
   (getString [_ offset]
     (let [length (.getInt bb offset)

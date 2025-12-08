@@ -1,0 +1,158 @@
+(ns opusdb.file-test
+  (:require [clojure.test :refer [deftest testing is use-fixtures]]
+            [opusdb.file :as file])
+  (:import [java.nio.file Files Paths]
+           [java.nio ByteBuffer]
+           [java.io File]))
+
+(def test-db-path "test-db")
+(def test-block-size 4096)
+
+(defn delete-dir [path]
+  (when (Files/exists path (into-array java.nio.file.LinkOption []))
+    (doseq [f (reverse (file-seq (File. (.toString path))))]
+      (Files/delete (.toPath f)))))
+
+(use-fixtures :each
+  (fn [f]
+    (delete-dir (Paths/get test-db-path (into-array String [])))
+    (try (f)
+         (finally (delete-dir (Paths/get test-db-path (into-array String [])))))))
+
+(deftest test-make-file-mngr
+  (testing "creates file manager"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)]
+      (is (= test-block-size (.blockSize fm)))
+      (is (= test-db-path (:dbPath fm)))))
+
+  (testing "creates directory"
+    (file/make-file-mngr test-db-path test-block-size)
+    (is (Files/exists (Paths/get test-db-path (into-array String []))
+                      (into-array java.nio.file.LinkOption []))))
+
+  (testing "cleans temp files"
+    (file/make-file-mngr test-db-path test-block-size)
+    (Files/createFile (Paths/get test-db-path (into-array String ["temp_test.db"]))
+                      (into-array java.nio.file.attribute.FileAttribute []))
+    (file/make-file-mngr test-db-path test-block-size)
+    (is (not (Files/exists (Paths/get test-db-path (into-array String ["temp_test.db"]))
+                           (into-array java.nio.file.LinkOption []))))))
+
+(deftest test-append
+  (testing "appends single block"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          block (.append fm "test.db")]
+      (is (= "test.db" (:file-name block)))
+      (is (= 0 (:block-id block)))))
+
+  (testing "appends multiple blocks"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          b1 (.append fm "test.db")
+          b2 (.append fm "test.db")
+          b3 (.append fm "test.db")
+          actual (map :block-id [b1 b2 b3])]
+      (is (= [1 2 3] actual))))
+
+  (testing "appends to different files"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          b1 (.append fm "file1.db")
+          b2 (.append fm "file2.db")]
+      (is (= "file1.db" (:file-name b1)))
+      (is (= "file2.db" (:file-name b2)))
+      (is (= 0 (:block-id b1)))
+      (is (= 0 (:block-id b2))))))
+
+(deftest test-write-and-read
+  (testing "single block"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          block (.append fm "test.db")
+          buf (ByteBuffer/allocate test-block-size)]
+      (.put buf (byte-array [1 2 3 4 5]))
+      (.writeBlock fm block buf)
+
+      (let [read-buf (ByteBuffer/allocate test-block-size)]
+        (.readBlock fm block read-buf)
+        (.rewind read-buf)
+        (is (= [1 2 3 4 5] (take 5 (repeatedly #(.get read-buf))))))))
+
+  (testing "multiple blocks"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          b1 (.append fm "test.db")
+          b2 (.append fm "test.db")]
+      (doto (ByteBuffer/allocate test-block-size)
+        (.put (byte-array [10 20 30]))
+        (as-> buf (.writeBlock fm b1 buf)))
+      (doto (ByteBuffer/allocate test-block-size)
+        (.put (byte-array [40 50 60]))
+        (as-> buf (.writeBlock fm b2 buf)))
+
+      (let [r1 (ByteBuffer/allocate test-block-size)
+            r2 (ByteBuffer/allocate test-block-size)]
+        (.readBlock fm b1 r1)
+        (.readBlock fm b2 r2)
+        (.rewind r1)
+        (.rewind r2)
+        (is (= [10 20 30] (take 3 (repeatedly #(.get r1)))))
+        (is (= [40 50 60] (take 3 (repeatedly #(.get r2))))))))
+
+  (testing "overwrite block"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          block (.append fm "test.db")]
+      (.writeBlock fm block (doto (ByteBuffer/allocate test-block-size)
+                              (.put (byte-array [1 2 3]))))
+      (.writeBlock fm block (doto (ByteBuffer/allocate test-block-size)
+                              (.put (byte-array [7 8 9]))))
+
+      (let [buf (ByteBuffer/allocate test-block-size)]
+        (.readBlock fm block buf)
+        (.rewind buf)
+        (is (= [7 8 9] (take 3 (repeatedly #(.get buf)))))))))
+
+(deftest test-multiple-files
+  (testing "independent files"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          b1 (.append fm "file1.db")
+          b2 (.append fm "file2.db")]
+      (.writeBlock fm b1 (doto (ByteBuffer/allocate test-block-size)
+                           (.put (byte-array [100 101]))))
+      (.writeBlock fm b2 (doto (ByteBuffer/allocate test-block-size)
+                           (.put (byte-array [50 51]))))
+      (let [r1 (ByteBuffer/allocate test-block-size)
+            r2 (ByteBuffer/allocate test-block-size)]
+        (.readBlock fm b1 r1)
+        (.readBlock fm b2 r2)
+        (.rewind r1)
+        (.rewind r2)
+        (is (= (byte 100) (.get r1)))
+        (is (= (byte 101) (.get r1)))
+        (is (= (byte 50) (.get r2)))
+        (is (= (byte 51) (.get r2)))))))
+
+(deftest test-error-handling
+  (testing "read large block id"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          _ (.append fm "test.db")
+          buf (ByteBuffer/allocate test-block-size)]
+      (.readBlock fm {:file-name "test.db" :block-id 999} buf)
+      (.rewind buf)
+      (is (= 0 (.get buf)))))
+
+  (testing "nil block-id throws"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          buf (ByteBuffer/allocate test-block-size)]
+      (is (thrown? Exception
+                   (.writeBlock fm {:file-name "test.db" :block-id nil} buf))))))
+
+(deftest test-block-alignment
+  (testing "blocks aligned correctly"
+    (let [fm (file/make-file-mngr test-db-path test-block-size)
+          blocks (repeatedly 3 #(.append fm "test.db"))]
+      (doseq [[block val] (map vector blocks [11 22 33])]
+        (.writeBlock fm block (doto (ByteBuffer/allocate test-block-size)
+                                (.put (byte-array [val])))))
+
+      (doseq [[block expected] (map vector blocks [11 22 33])]
+        (let [buf (ByteBuffer/allocate test-block-size)]
+          (.readBlock fm block buf)
+          (.rewind buf)
+          (is (= expected (.get buf))))))))

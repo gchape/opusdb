@@ -14,9 +14,9 @@
    "Two Blocks with different file names should not be equal")
 
   (test/is
-   (= (.fileName (block/make-block "A.txt" 0)) "A.txt")
+   (= (:file-name (block/make-block "A.txt" 0)) "A.txt")
    "The file name of the Block should be 'A.txt'")
 
   (test/is
-   (= (.blockNum (block/make-block "A.txt" 0)) 0)
+   (= (:block-id (block/make-block "A.txt" 0)) 0)
    "The block number of the Block should be 0"))
