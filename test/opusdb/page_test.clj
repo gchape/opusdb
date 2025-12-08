@@ -1,6 +1,6 @@
 (ns opusdb.page-test
   (:require [clojure.test :as test]
-            [opusdb.page :as  page]))
+            [opusdb.page :as page]))
 
 (test/deftest test-make-page-with-long
   (test/testing "Creating a page with a block size"
@@ -79,7 +79,63 @@
   (test/testing "getString does not change buffer position permanently"
     (let [p (page/make-page 1024)]
       (.setString p 0 "Test")
-      ;; Position should be restored after getString
       (.getString p 0)
       (.getString p 0)
       (test/is (= "Test" (.getString p 0))))))
+
+(test/deftest test-get-set-float
+  (test/testing "Getting and setting floats"
+    (let [p (page/make-page 1024)]
+      (.setFloat p 0 2.5)
+      (test/is (= 2.5 (.getFloat p 0)))
+
+      (.setFloat p 100 -8.0)
+      (test/is (= -8.0 (.getFloat p 100)))
+
+      (.setFloat p 500 Float/MAX_VALUE)
+      (test/is (= Float/MAX_VALUE (.getFloat p 500))))))
+
+(test/deftest test-get-set-double
+  (test/testing "Getting and setting doubles"
+    (let [p (page/make-page 1024)]
+      (.setDouble p 0 3.125)
+      (test/is (= 3.125 (.getDouble p 0)))
+
+      (.setDouble p 100 -10.25)
+      (test/is (= -10.25 (.getDouble p 100)))
+
+      (.setDouble p 500 Double/MAX_VALUE)
+      (test/is (= Double/MAX_VALUE (.getDouble p 500))))))
+
+(test/deftest test-set-float-and-double-mixed
+  (test/testing "Setting float and double at the same offset"
+    (let [p (page/make-page 1024)]
+      (.setFloat p 0 1.5)
+      (.setDouble p 4 4.75)
+
+      (test/is (= 1.5 (.getFloat p 0)))
+      (test/is (= 4.75 (.getDouble p 4))))))
+
+(test/deftest test-get-set-float-with-special-values
+  (test/testing "Getting and setting special float values"
+    (let [p (page/make-page 1024)]
+      (.setFloat p 0 Float/NaN)
+      (test/is (Float/isNaN (.getFloat p 0)))
+
+      (.setFloat p 100 Float/POSITIVE_INFINITY)
+      (test/is (= Float/POSITIVE_INFINITY (.getFloat p 100)))
+
+      (.setFloat p 200 Float/NEGATIVE_INFINITY)
+      (test/is (= Float/NEGATIVE_INFINITY (.getFloat p 200))))))
+
+(test/deftest test-get-set-double-with-special-values
+  (test/testing "Getting and setting special double values"
+    (let [p (page/make-page 1024)]
+      (.setDouble p 0 Double/NaN)
+      (test/is (Double/isNaN (.getDouble p 0)))
+
+      (.setDouble p 100 Double/POSITIVE_INFINITY)
+      (test/is (= Double/POSITIVE_INFINITY (.getDouble p 100)))
+
+      (.setDouble p 200 Double/NEGATIVE_INFINITY)
+      (test/is (= Double/NEGATIVE_INFINITY (.getDouble p 200))))))

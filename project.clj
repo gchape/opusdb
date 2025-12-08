@@ -4,7 +4,7 @@
   :license {:name "EPL-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   :dependencies [[org.clojure/clojure "1.12.2"]]
-  :main ^:skip-aot opusdb.core
+  :main opusdb.main.core/-main
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}})

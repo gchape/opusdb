@@ -16,8 +16,21 @@
             (int)))))
 
 (definterface IPage
+  (^short getShort [^int offset])
+  (^void setShort [^int offset ^short n])
+
   (^int getInt [^int offset])
   (^void setInt [^int offset ^int n])
+
+  (^long getLong [^int offset])
+  (^void setLong [^int offset ^long l])
+
+  (^float getFloat [^int offset])
+  (^void setFloat [^int offset ^float f])
+
+  (^double getDouble [^int offset])
+  (^void setDouble [^int offset ^double d])
+
   (^String getString [^int offset])
   (^void setString [^int offset ^String s]))
 
@@ -29,11 +42,20 @@
   (rewind [_] (.rewind bb))
 
   IPage
-  (getInt [_ offset]
-    (.getInt bb offset))
+  (getShort [_ offset] (.getShort bb offset))
+  (setShort [_ offset n] (.putShort bb offset n))
 
-  (setInt [_ offset n]
-    (.putInt bb offset n))
+  (getInt [_ offset] (.getInt bb offset))
+  (setInt [_ offset n] (.putInt bb offset n))
+
+  (getLong [_ offset] (.getLong bb offset))
+  (setLong [_ offset l] (.putLong bb offset l))
+
+  (getFloat [_ offset] (.getFloat bb offset))
+  (setFloat [_ offset f] (.putFloat bb offset f))
+
+  (getDouble [_ offset] (.getDouble bb offset))
+  (setDouble [_ offset d] (.putDouble bb offset d))
 
   (getString [_ offset]
     (let [length (.getInt bb offset)
@@ -54,16 +76,17 @@
 (defmulti make-page
   "Creates a Page instance from either a block size (Long) or byte array.
   Dispatches on the string representation of the argument's type."
-  #(str (type %)))
+  class)
 
-(defmethod make-page "class java.lang.Long"
+(defmethod make-page Long
   [block-size]
   "Creates a new Page with an allocated ByteBuffer of the specified block-size.
   Uses US-ASCII charset for string encoding."
   (Page. (ByteBuffer/allocate block-size)
          charset))
 
-(defmethod make-page "class [B"
+(defmethod make-page (class
+                      (byte-array 0))
   [b]
   "Creates a new Page by wrapping an existing byte array.
   Uses US-ASCII charset for string encoding."
