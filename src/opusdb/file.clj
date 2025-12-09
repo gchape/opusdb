@@ -19,9 +19,9 @@
 
 (definterface IFileMngr
   (^int blockSize [])
-  (^void readBlock [^clojure.lang.IPersistentMap b p])
-  (^void writeBlock [^clojure.lang.IPersistentMap b p])
-  (^clojure.lang.IPersistentMap append [^String fileName]))
+  (^void readFrom [^clojure.lang.IPersistentMap b p])
+  (^void writeTo [^clojure.lang.IPersistentMap b p])
+  (^clojure.lang.IPersistentMap appendNew [^String fileName]))
 
 (defn- get-or-open-channel
   [lru-cache db-path file-name]
@@ -42,7 +42,7 @@
   IFileMngr
   (blockSize [_] blockSize)
 
-  (readBlock [_ b p]
+  (readFrom [_ b p]
     (try
       (validate-block! b)
       (let [file-name (:file-name b)
@@ -61,7 +61,7 @@
                          :offset (* (:blockn b) blockSize)}
                         e)))))
 
-  (writeBlock [_ b p]
+  (writeTo [_ b p]
     (try
       (validate-block! b)
       (let [file-name (:file-name b)
@@ -80,7 +80,7 @@
                          :offset (* (:blockn b) blockSize)}
                         e)))))
 
-  (append [_ fileName]
+  (appendNew [_ fileName]
     (try
       (let [ch (get-or-open-channel openChannels dbPath fileName)
             new-block-num (quot (.size ^FileChannel ch) blockSize)
