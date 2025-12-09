@@ -1,17 +1,17 @@
 (ns opusdb.file
   (:require [opusdb.lru :as lru]
             [clojure.spec.alpha :as spec])
-  (:import [java.nio.file Files Path StandardOpenOption LinkOption]
-           [java.nio.file.attribute FileAttribute]
-           [java.nio.channels FileChannel]
+  (:import [java.io File]
            [java.nio ByteBuffer]
+           [java.nio.channels FileChannel]
+           [java.nio.file StandardOpenOption]
            [java.util LinkedHashMap]))
 
 (spec/def ::file-name string?)
 (spec/def ::blockn int?)
 (spec/def ::block (spec/keys :req-un [::file-name ::blockn]))
 
-(defn- validate-block! [b]
+(defn- block? [b]
   (when-not (spec/valid? ::block b)
     (throw (ex-info "Invalid block map"
                     {:block b}
@@ -27,7 +27,7 @@
   [lru-cache db-path file-name]
   (locking lru-cache
     (or (.get ^LinkedHashMap lru-cache file-name)
-        (let [path (Path/of db-path (into-array String [file-name]))
+        (let [path (.toPath (File. (str db-path "/" file-name)))
               ch (FileChannel/open path (into-array StandardOpenOption
                                                     [StandardOpenOption/READ
                                                      StandardOpenOption/WRITE
@@ -44,7 +44,7 @@
 
   (readFrom [_ b p]
     (try
-      (validate-block! b)
+      (block? b)
       (let [file-name (:file-name b)
             ch (get-or-open-channel openChannels dbPath file-name)
             offset (* (:blockn b) blockSize)
@@ -63,7 +63,7 @@
 
   (writeTo [_ b p]
     (try
-      (validate-block! b)
+      (block? b)
       (let [file-name (:file-name b)
             ch (get-or-open-channel openChannels dbPath file-name)
             offset (* (:blockn b) blockSize)
@@ -97,23 +97,22 @@
                         e))))))
 
 (defn make-file-mngr
-  ([db-path-str block-size]
-   (make-file-mngr db-path-str block-size 100))
-  ([db-path-str block-size max-open-files]
-   (let [db-path (Path/of db-path-str (into-array String []))
-         is-new? (not (Files/exists db-path (into-array LinkOption [])))]
+  ([db-path block-size]
+   (make-file-mngr db-path block-size 100))
+  ([db-path block-size max-open-files]
+   (let [file (File. db-path)
+         is-new? (not (.exists file))]
      (when is-new?
-       (Files/createDirectory db-path (into-array FileAttribute [])))
-     (with-open [stream (Files/list db-path)]
-       (doseq [temp-file
-               (stream-into!
-                '()
-                (filter #(.startsWith (.toString (.getFileName ^Path %)) "temp"))
-                stream)]
-         (try
-           (Files/delete temp-file)
-           (catch Exception e
-             (println "Warning: Failed to delete temp file" temp-file ":" (.getMessage e))))))
+       (.mkdir file))
+     (doseq [temp-file (eduction
+                        (filter #(.startsWith % "temp"))
+                        (.list file))]
+       (try
+         (-> (str db-path "/" temp-file)
+             (File.)
+             (.delete))
+         (catch Exception e
+           (println "Warning: Failed to delete temp file" temp-file ":" (.getMessage e)))))
      (->FileMngr (lru/make-lru-cache max-open-files #(.close ^FileChannel %2))
-                 db-path-str
+                 db-path
                  block-size))))
