@@ -1,118 +1,119 @@
 (ns opusdb.file
-  (:require [opusdb.lru :as lru]
-            [clojure.spec.alpha :as spec])
+  (:require [opusdb.page]
+            [opusdb.lru :as lru]
+            [opusdb.uncheked.math :refer [*int]])
   (:import [java.io File]
            [java.nio ByteBuffer]
            [java.nio.channels FileChannel]
            [java.nio.file StandardOpenOption]
            [java.util LinkedHashMap]))
 
-(spec/def ::file-name string?)
-(spec/def ::blockn int?)
-(spec/def ::block (spec/keys :req-un [::file-name ::blockn]))
-
-(defn- block? [b]
-  (when-not (spec/valid? ::block b)
-    (throw (ex-info "Invalid block map"
-                    {:block b}
-                    (spec/explain-data ::block b)))))
-
 (definterface IFileMngr
   (^int blockSize [])
-  (^void readFrom [^clojure.lang.IPersistentMap b p])
-  (^void writeTo [^clojure.lang.IPersistentMap b p])
-  (^clojure.lang.IPersistentMap appendNew [^String fileName]))
+  (^long length [^String fileName])
+  (^void readFrom [^clojure.lang.IPersistentMap block ^opusdb.page.Page page])
+  (^void writeTo [^clojure.lang.IPersistentMap block ^opusdb.page.Page page])
+  (^clojure.lang.IPersistentMap append [^String fileName]))
 
-(defn- get-or-open-channel
-  [lru-cache db-path file-name]
-  (locking lru-cache
-    (or (.get ^LinkedHashMap lru-cache file-name)
-        (let [path (.toPath (File. (str db-path "/" file-name)))
-              ch (FileChannel/open path (into-array StandardOpenOption
-                                                    [StandardOpenOption/READ
-                                                     StandardOpenOption/WRITE
-                                                     StandardOpenOption/DSYNC
-                                                     StandardOpenOption/CREATE]))]
-          (.put ^LinkedHashMap lru-cache file-name ch)
-          ch))))
+(def ^:private get-or-open-channel
+  (fn* [lru-cache db-path file-name]
+       (locking lru-cache
+         (or (.get ^LinkedHashMap lru-cache file-name)
+             (let [path (.toPath (File. (str db-path "/" file-name)))
+                   ch (FileChannel/open path (into-array StandardOpenOption
+                                                         [StandardOpenOption/READ
+                                                          StandardOpenOption/WRITE
+                                                          StandardOpenOption/DSYNC
+                                                          StandardOpenOption/CREATE]))]
+               (.put ^LinkedHashMap lru-cache file-name ch)
+               ch)))))
 
-(defrecord FileMngr [^LinkedHashMap openChannels
-                     ^String dbPath
-                     ^int blockSize]
+(defrecord FileMngr [^LinkedHashMap open-channels
+                     ^String db-path
+                     ^int block-size
+                     strip-locks]
   IFileMngr
-  (blockSize [_] blockSize)
+  (blockSize [_]
+    block-size)
 
-  (readFrom [_ b p]
+  (length [_ file-name]
+    (-> (str db-path "/" file-name)
+        (File.)
+        (.length)))
+
+  (readFrom [_ {:keys [file-name blockn] :as block} page]
     (try
-      (block? b)
-      (let [file-name (:file-name b)
-            ch (get-or-open-channel openChannels dbPath file-name)
-            offset (* (:blockn b) blockSize)
-            buffer (.rewind p)]
-        (locking ch
+      (let [ch (get-or-open-channel open-channels db-path file-name)
+            offset (*int blockn block-size)
+            buffer (.rewind page)
+            lock (strip-locks (mod (hash file-name) (count strip-locks)))]
+        (locking lock
           (.position ^FileChannel ch ^long offset)
           (.read ^FileChannel ch ^ByteBuffer buffer)))
-
       (catch Exception e
         (throw (ex-info "Failed to read block"
-                        {:block b
-                         :file-name (:file-name b)
-                         :blockn (:blockn b)
-                         :offset (* (:blockn b) blockSize)}
+                        {:block block
+                         :file-name file-name
+                         :blockn blockn
+                         :offset (*int blockn block-size)}
                         e)))))
 
-  (writeTo [_ b p]
+  (writeTo [_ {:keys [file-name blockn] :as block} page]
     (try
-      (block? b)
-      (let [file-name (:file-name b)
-            ch (get-or-open-channel openChannels dbPath file-name)
-            offset (* (:blockn b) blockSize)
-            buffer (.rewind p)]
-        (locking ch
+      (let [ch (get-or-open-channel open-channels db-path file-name)
+            offset (*int blockn block-size)
+            buffer (.rewind page)
+            lock (strip-locks (mod (hash file-name) (count strip-locks)))]
+        (locking lock
           (.position ^FileChannel ch ^long offset)
           (.write ^FileChannel ch ^ByteBuffer buffer)))
-
       (catch Exception e
         (throw (ex-info "Failed to write block"
-                        {:block b
-                         :file-name (:file-name b)
-                         :blockn (:blockn b)
-                         :offset (* (:blockn b) blockSize)}
+                        {:block block
+                         :file-name file-name
+                         :blockn blockn
+                         :offset (*int blockn block-size)}
                         e)))))
 
-  (appendNew [_ fileName]
+  (append [_ file-name]
     (try
-      (let [ch (get-or-open-channel openChannels dbPath fileName)
-            new-block-num (quot (.size ^FileChannel ch) blockSize)
-            offset (* new-block-num blockSize)
-            buffer (ByteBuffer/allocate blockSize)]
-        (locking ch
-          (.position ^FileChannel ch ^long offset)
-          (.write ^FileChannel ch buffer))
-        {:file-name fileName :blockn new-block-num})
-
+      (let [ch (get-or-open-channel open-channels db-path file-name)
+            lock (strip-locks (mod (hash file-name) (count strip-locks)))]
+        (locking lock
+          (let [new-blockn (quot (.size ^FileChannel ch) block-size)
+                offset (*int new-blockn block-size)
+                buffer (ByteBuffer/allocate block-size)]
+            (.position ^FileChannel ch ^long offset)
+            (.write ^FileChannel ch buffer)
+            {:file-name file-name :blockn new-blockn})))
       (catch Exception e
         (throw (ex-info "Failed to append block"
-                        {:file-name fileName}
+                        {:file-name file-name}
                         e))))))
+
+(def ^:private get-or-make-file-mngr
+  (memoize
+   (fn* [db-path block-size max-open-files]
+        (let [file (File. db-path)
+              is-new? (not (.exists file))]
+          (when is-new?
+            (.mkdirs file))
+          (doseq [temp-file (eduction
+                             (filter #(.startsWith ^String % "temp"))
+                             (.list file))]
+            (try
+              (-> (str db-path "/" temp-file)
+                  (File.)
+                  (.delete))
+              (catch Exception e
+                (println "Warning: Failed to delete temp file" temp-file ":" (.getMessage e)))))
+          (->FileMngr (lru/make-lru-cache max-open-files #(.close ^FileChannel %2))
+                      db-path
+                      block-size
+                      (vec (repeatedly 16 #(Object.))))))))
 
 (defn make-file-mngr
   ([db-path block-size]
    (make-file-mngr db-path block-size 100))
   ([db-path block-size max-open-files]
-   (let [file (File. db-path)
-         is-new? (not (.exists file))]
-     (when is-new?
-       (.mkdir file))
-     (doseq [temp-file (eduction
-                        (filter #(.startsWith % "temp"))
-                        (.list file))]
-       (try
-         (-> (str db-path "/" temp-file)
-             (File.)
-             (.delete))
-         (catch Exception e
-           (println "Warning: Failed to delete temp file" temp-file ":" (.getMessage e)))))
-     (->FileMngr (lru/make-lru-cache max-open-files #(.close ^FileChannel %2))
-                 db-path
-                 block-size))))
+   (get-or-make-file-mngr db-path block-size max-open-files)))
