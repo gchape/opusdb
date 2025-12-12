@@ -94,7 +94,7 @@
 (def ^:private get-or-make-file-mngr
   (memoize
    (fn* [db-path block-size max-open-files]
-        (let [file (File. db-path)
+        (let [file (File. ^String db-path)
               is-new? (not (.exists file))]
           (when is-new?
             (.mkdirs file))
