@@ -1,4 +1,4 @@
-(ns opusdb.uncheked.math)
+(ns opusdb.unchecked.math)
 
 (def *int
   (fn* [x y & more]
