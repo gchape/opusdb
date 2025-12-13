@@ -113,6 +113,11 @@
   (Page. (ByteBuffer/allocate block-size)
          charset))
 
+(defmethod make-page Integer
+  [block-size]
+  (Page. (ByteBuffer/allocate block-size)
+         charset))
+
 (defmethod make-page (class (byte-array 0))
   [byte-arr]
   (Page. (ByteBuffer/wrap byte-arr)
