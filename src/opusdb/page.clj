@@ -1,9 +1,16 @@
 (ns opusdb.page
+  (:refer-clojure :exclude [+ *])
   (:import [java.nio ByteBuffer]
-           [java.nio.charset Charset])
-  (:require [opusdb.uncheked.math :refer [+int]]))
+           [java.nio.charset Charset]))
 
-(def ^Charset charset (Charset/forName "US-ASCII"))
+(def +
+  (fn* [x y] (unchecked-add-int x y)))
+
+(def *
+  (fn [x y] (unchecked-multiply-int x y)))
+
+(def ^Charset charset
+  (Charset/forName "US-ASCII"))
 
 (defn max-encoded-size
   [^String s]
@@ -71,7 +78,7 @@
     (let [length (.getInt bb offset)
           b (byte-array length)
           original-pos (.position bb)]
-      (.position bb ^int (+int 4 offset))
+      (.position bb ^int (+ 4 offset))
       (.get bb b)
       (.position bb original-pos)
       b))
@@ -86,7 +93,7 @@
     (let [length (.getInt bb offset)
           b (byte-array length)
           original-pos (.position bb)]
-      (.position bb ^int (+int 4 offset))
+      (.position bb ^int (+ 4 offset))
       (.get bb b)
       (.position bb original-pos)
       (String. b charset)))

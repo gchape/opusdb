@@ -2,38 +2,17 @@
   (:import [java.util LinkedHashMap]))
 
 (defn make-lru-cache
-  ([size]
-   (make-lru-cache size nil))
-  ([size eviction-fn]
-   (let [lock (Object.)]
-     (proxy [LinkedHashMap] [size 0.75 true]
-       (removeEldestEntry [^java.util.Map$Entry entry]
-         (let [^LinkedHashMap this this]
-           (if (> (.size this) size)
-             (if (not (nil? eviction-fn))
-               (try
-                 (eviction-fn (.getKey entry) (.getValue entry))
-                 (catch Exception e
-                   (println "Error during eviction:" (.getMessage e))))
-               true)
-             false)))
-       (get [key]
-         (locking lock
-           (let [^LinkedHashMap this this]
-             (proxy-super get key))))
-       (put [key value]
-         (locking lock
-           (let [^LinkedHashMap this this]
-             (proxy-super put key value))))
-       (remove [key]
-         (locking lock
-           (let [^LinkedHashMap this this]
-             (proxy-super remove key))))
-       (containsKey [key]
-         (locking lock
-           (let [^LinkedHashMap this this]
-             (proxy-super containsKey key))))
-       (clear []
-         (locking lock
-           (let [^LinkedHashMap this this]
-             (proxy-super clear))))))))
+  "Creates an LRU cache with optional eviction function.
+   eviction-fn: (fn [entry-value] boolean) - returns true if eviction succeeded"
+  ([capacity]
+   (make-lru-cache capacity nil))
+  ([capacity eviction-fn]
+   (proxy [LinkedHashMap] [capacity 0.75 true]
+     (removeEldestEntry [^java.util.Map$Entry entry]
+       (let [^LinkedHashMap this this]
+         (if (> (.size this) capacity)
+           (if (not (nil? eviction-fn))
+             (let [entry-map {:key (.getKey entry) :value (.getValue entry)}]
+               (eviction-fn entry-map))
+             true)
+           false))))))

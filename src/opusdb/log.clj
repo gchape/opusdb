@@ -1,90 +1,98 @@
 (ns opusdb.log
-  (:require [opusdb.file]
-            [opusdb.page :as page]
-            [opusdb.uncheked.math :refer [+int -int]]))
+  (:refer-clojure :exclude [+ - inc])
+  (:require [opusdb.page :as page])
+  (:import [opusdb.page Page]
+           [opusdb.file FileMgr]))
 
-(definterface ILogMngr
+(def +
+  (fn* [x y & more]
+       (reduce unchecked-add-int 0 (into [x y] more))))
+
+(def -
+  (fn* [x y] (unchecked-subtract-int x y)))
+
+(def inc
+  (fn* [x] (unchecked-inc-int x)))
+
+(definterface ILogMgr
   (^void flush [])
   (^void flush [^int lsn])
-  (^int append [^bytes rec])
-  (^clojure.lang.IPersistentVector toVector []))
+  (^int append [^bytes record])
+  (^clojure.lang.IPersistentVector getSnapshot []))
 
-(deftype LogMngr [^opusdb.file.FileMngr file-mngr
-                  ^String file-name
-                  ^opusdb.page.Page page
-                  ^:unsynchronized-mutable ^clojure.lang.IPersistentMap block
-                  ^:unsynchronized-mutable ^int last-saved-lsn
-                  ^:unsynchronized-mutable ^int latest-lsn]
-  ILogMngr
-  (append [this rec]
+(deftype LogMgr [^FileMgr fileMgr
+                 ^String fileName
+                 ^Page page
+                 ^:unsynchronized-mutable ^clojure.lang.IPersistentMap block
+                 ^:unsynchronized-mutable ^int last-saved-lsn
+                 ^:unsynchronized-mutable ^int latest-lsn]
+
+  ILogMgr
+
+  (append [this record]
     (locking this
       (let [boundary (.getInt page 0)
-            rec-length (alength rec)
-            bytes-needed (+int rec-length 4)]
-        (when (< (-int boundary bytes-needed) 4)
+            length (alength record)
+            bytes-needed (+ length 4)]
+        (when (< (- boundary bytes-needed) 4)
           (.flush this)
-          (let [new-block (.append file-mngr file-name)
-                boundary (.blockSize file-mngr)]
-            (.setInt page 0 boundary)
+          (let [new-block (.append fileMgr fileName)
+                free-boundary (.blockSize fileMgr)]
+            (.setInt page 0 free-boundary)
             (set! block new-block)
-            (.writeTo file-mngr block page)))
+            (.write fileMgr block page)))
         (let [boundary (.getInt page 0)
-              write-pos (-int boundary bytes-needed)]
-          (.setBytes page write-pos rec)
-          (.setInt page 0 write-pos)
-          (set! latest-lsn (unchecked-inc-int latest-lsn))
+              position (- boundary bytes-needed)]
+          (.setBytes page position record)
+          (.setInt page 0 position)
+          (set! latest-lsn (int (inc latest-lsn)))
           latest-lsn))))
 
   (flush [_]
-    (.writeTo file-mngr block page)
+    (.write fileMgr block page)
     (set! last-saved-lsn latest-lsn))
 
   (flush [this lsn]
     (when (>= lsn last-saved-lsn)
       (.flush this)))
 
-  (toVector [_]
-    (let [block-size (.blockSize file-mngr)
-          ^opusdb.page.Page temp-page (page/make-page (byte-array block-size))]
-      (loop [current-block block
-             read-pos nil
+  (getSnapshot [_]
+    (let [block-size (.blockSize fileMgr)
+          ^Page tmp-page (page/make-page (byte-array block-size))]
+      (loop [b block
+             position nil
              result []]
-        (let [read-pos (or read-pos
-                           (do (.readFrom file-mngr current-block temp-page)
-                               (.getInt temp-page 0)))
-              {:keys [blockn]} current-block]
+        (let [position (or position
+                           (do
+                             (.read fileMgr b tmp-page)
+                             (.getInt tmp-page 0)))
+              block-id (:block-id b)]
           (cond
-            (and (zero? blockn)
-                 (>= read-pos block-size)) result
+            ;; reached first block completely scanned
+            (and (zero? block-id) (>= position block-size))
+            result
 
-            (>= read-pos block-size) (recur {:file-name file-name :blockn (dec blockn)}
-                                            nil
-                                            result)
+            ;; move to previous block
+            (>= position block-size)
+            (recur {:file-name fileName :block-id (dec block-id)} nil result)
 
             :else
-            (let [rec (.getBytes temp-page read-pos)
-                  next-read-pos (+int 4 read-pos (alength rec))]
-              (recur current-block
-                     next-read-pos
-                     (conj result rec)))))))))
+            (let [rec (.getBytes tmp-page position)
+                  next-pos (+ 4 position (alength rec))]
+              (recur b next-pos (conj result rec)))))))))
 
-(def make-log-mngr
-  (fn* [^opusdb.file.FileMngr file-mngr ^String file-name]
-       (let [^opusdb.page.Page page (page/make-page (long (.blockSize file-mngr)))
-             length (.length file-mngr file-name)
-             block (if (zero? length)
-                     (let [block (.append file-mngr file-name)
-                           boundary (.blockSize file-mngr)]
-                       (.setInt page 0 boundary)
-                       (.writeTo file-mngr block page)
-                       block)
-                     (let [block {:file-name file-name
-                                  :blockn (dec (quot length (.blockSize file-mngr)))}]
-                       (.readFrom file-mngr block page)
-                       block))]
-         (->LogMngr file-mngr
-                    file-name
-                    page
-                    block
-                    0
-                    0))))
+(defn make-log-mgr
+  [^FileMgr file-mgr ^String file-name]
+  (let [^Page page (page/make-page (long (.blockSize file-mgr)))
+        file-size (.fileSize file-mgr file-name)
+        block (if (zero? file-size)
+                (let [block (.append file-mgr file-name)
+                      boundary (.blockSize file-mgr)]
+                  (.setInt page 0 boundary)
+                  (.write file-mgr block page)
+                  block)
+                (let [block {:file-name file-name
+                             :block-id (dec (quot file-size (.blockSize file-mgr)))}]
+                  (.read file-mgr block page)
+                  block))]
+    (->LogMgr file-mgr file-name page block 0 0)))
