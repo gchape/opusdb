@@ -13,6 +13,6 @@
          (if (> (.size this) capacity)
            (if (not (nil? eviction-fn))
              (let [entry-map {:key (.getKey entry) :value (.getValue entry)}]
-               (eviction-fn entry-map))
+               (eviction-fn this entry-map))
              true)
            false))))))
