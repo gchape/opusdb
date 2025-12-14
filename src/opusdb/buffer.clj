@@ -1,167 +1,93 @@
 (ns opusdb.buffer
-  (:require [opusdb.page :as page]
-            [opusdb.file :as file]
-            [opusdb.log :as log]
-            [opusdb.lru :as lru])
+  (:refer-clojure :exclude [flush])
+  (:require [opusdb.page :as p]
+            [opusdb.file]
+            [opusdb.log])
   (:import [opusdb.file FileMgr]
            [opusdb.log LogMgr]
-           [opusdb.page Page]
-           [java.util LinkedHashMap]))
+           [opusdb.page Page]))
 
-(definterface IBuffer
-  (^int txId [])
-  (^opusdb.page.Page page [])
-  (^clojure.lang.IPersistentMap block [])
-
-  (^void markDirty [^int txn-id ^int lsn])
-  (^void assignToBlock [^clojure.lang.IPersistentMap block])
-
-  (^void pin [])
-  (^void unpin [])
-  (^boolean isPinned [])
-
-  (^void flush []))
-
-(deftype Buffer [^FileMgr file-mgr
-                 ^Page page
-                 ^LogMgr log-mgr
-                 ^:unsynchronized-mutable ^clojure.lang.IPersistentMap block
-                 ^:unsynchronized-mutable ^int pin-count
-                 ^:unsynchronized-mutable ^int tx-id
-                 ^:unsynchronized-mutable ^int lsn]
-
-  IBuffer
-
-  (page [_] page)
-
-  (block [_] block)
-
-  (txId [_] tx-id)
-
-  (isPinned [_]
-    (pos? pin-count))
-
-  (markDirty [_ new-tx-id new-lsn]
-    (when (neg? new-tx-id)
-      (throw (IllegalArgumentException.
-              "Transaction ID must be non-negative")))
-    (set! tx-id new-tx-id)
-    (when-not (neg? new-lsn)
-      (set! lsn new-lsn)))
-
-  (assignToBlock [this new-block]
-    (.flush this)
-    (set! block new-block)
-    (.read file-mgr new-block page)
-    (set! pin-count (int 0)))
-
-  (flush [_]
-    (when (not= tx-id -1)
-      (when (nil? block)
-        (throw (IllegalStateException.
-                "Cannot flush: buffer has no assigned block")))
-      (.flush log-mgr lsn)
-      (.write file-mgr block page)
-      (set! tx-id (int -1))))
-
-  (pin [_]
-    (set! pin-count (unchecked-inc-int pin-count)))
-
-  (unpin [_]
-    (set! pin-count (unchecked-dec-int pin-count))))
-
-(defn make-buffer
-  [^FileMgr file-mgr ^LogMgr log-mgr]
-  (let [blockSize (.blockSize file-mgr)
-        page (page/make-page blockSize)]
-    (->Buffer
-     file-mgr
-     page
-     log-mgr
-     nil
-     0
-     -1
-     -1)))
-
-(definterface IBufferMgr
-  (^int available [])
-
-  (^void flushAll [^int txid])
-
-  (^opusdb.buffer.Buffer pin [^clojure.lang.IPersistentMap block])
-  (^void unpin [^opusdb.buffer.Buffer buffer]))
-
-(defn- find-existing-buffer
-  [^LinkedHashMap buffers block]
-  (let [values (iterator-seq (.iterator (.values buffers)))]
-    (first (filter #(let [b (.block ^Buffer %)]
-                      (and (some? b) (= b block)))
-                   values))))
-
-(defn- choose-unpinned-buffer
-  [^LinkedHashMap buffers]
-  (loop [it (.iterator (.values buffers))]
-    (when (.hasNext it)
-      (let [next (.next it)]
-        (if (.isPinned ^Buffer next)
-          (recur it)
-          next)))))
-
-(deftype BufferMgr [^LinkedHashMap buffers
-                    ^:unsynchronized-mutable ^int available
-                    ^long timeout]
-  :load-ns true
-  IBufferMgr
-
-  (available [this]
-    (locking this
-      available))
-
-  (flushAll [this txid]
-    (locking this
-      (let [values (iterator-seq (.iterator (.values buffers)))]
-        (run! #(when (= (.txId ^Buffer %) txid)
-                 (.flush ^Buffer %))
-              values))))
-
-  (unpin [this buffer]
-    (locking this
-      (.unpin buffer)
-      (when-not (.isPinned buffer)
-        (set! available (unchecked-inc-int available))
-        (.notifyAll this))))
-
-  (pin [this block]
-    (locking this
-      (try
-        (let [start-time (System/currentTimeMillis)]
-          (loop []
-            (let [^Buffer buffer (or (find-existing-buffer buffers block)
-                                     (when-let [^Buffer unpinned (choose-unpinned-buffer buffers)]
-                                       (.assignToBlock unpinned block)
-                                       unpinned))]
-              (if (nil? buffer)
-                (if (> (- (System/currentTimeMillis) start-time) timeout)
-                  (throw (ex-info "Buffer abort: waiting too long" {:block block}))
-                  (do (.wait this timeout)
-                      (recur)))
-                (do
-                  (when-not (.isPinned buffer)
-                    (set! available (unchecked-dec-int available)))
-                  (.pin buffer)
-                  (.get buffers buffer)
-                  buffer)))))
-        (catch InterruptedException _
-          (throw (ex-info "Buffer abort: interrupted" {:block block}))))))
+(defrecord Buffer [^FileMgr file-mgr
+                   ^Page pg
+                   ^LogMgr log-mgr
+                   ^clojure.lang.ITransientMap state]
 
   Object
   (toString [_]
-    (str "BufferMgr[available=" available ", timeout=" timeout "ms]")))
+    (let [s state]
+      (str "Buffer[block=" (:block s)
+           ", pinned=" (pos? (:pin-count s))
+           ", txid=" (:txid s) "]"))))
 
-(defn make-buffer-mgr
-  [file-mgr log-mgr pool-size]
-  (let [^LinkedHashMap lru-cache (lru/make-lru-cache pool-size nil)
-        buffers (repeatedly pool-size #(make-buffer file-mgr log-mgr))]
-    (doseq [buffer buffers]
-      (.put lru-cache buffer buffer))
-    (->BufferMgr lru-cache pool-size 10000)))
+(defn block [^Buffer buffer]
+  (:block (.-state buffer)))
+
+(defn txid [^Buffer buffer]
+  (:txid (.-state buffer)))
+
+(defn lsn [^Buffer buffer]
+  (:lsn (.-state buffer)))
+
+(defn pinned? [^Buffer buffer]
+  (pos? (:pin-count (.-state buffer))))
+
+(defn pin-count [^Buffer buffer]
+  (:pin-count (.-state buffer)))
+
+(defn mark-dirty [^Buffer buffer new-tx-id new-lsn]
+  (when (neg? new-tx-id)
+    (throw (IllegalArgumentException.
+            "Transaction ID must be non-negative")))
+  (let [state (.-state buffer)
+        _ (assoc! state :txid new-tx-id)]
+    (when (and new-lsn (not (neg? new-lsn)))
+      (assoc! state :lsn new-lsn))))
+
+(defn pin [^Buffer buffer]
+  (let [state (.-state buffer)]
+    (assoc! state :pin-count
+            (unchecked-inc-int (:pin-count state)))))
+
+(defn unpin [^Buffer buffer]
+  (let [state (.-state buffer)
+        cnt   (:pin-count state)]
+    (when (zero? cnt)
+      (throw (IllegalStateException.
+              "Cannot unpin buffer with pin-count 0")))
+    (assoc! state :pin-count (unchecked-dec-int cnt))))
+
+(defn flush [^Buffer buffer]
+  (let [state (.-state buffer)
+        tx-id (:txid state)]
+    (when (not= tx-id -1)
+      (let [blk (:block state)]
+        (when-not blk
+          (throw (IllegalStateException.
+                  "Cannot flush: buffer has no assigned block")))
+        (.flush (.-log-mgr buffer) (:lsn state))
+        (.write (.-file-mgr buffer) blk (.-pg buffer))
+        (assoc! state :txid -1)))))
+
+(defn assign-to-block [^Buffer buffer new-block]
+  (flush buffer)
+  (.read (.-file-mgr buffer) new-block (.-pg buffer))
+  (conj! (.-state buffer)
+         {:block new-block
+          :pin-count 0
+          :txid -1
+          :lsn -1}))
+
+(defn page [^Buffer buffer]
+  (.-pg buffer))
+
+(defn make-buffer
+  [^FileMgr file-mgr ^LogMgr log-mgr]
+  (let [block-size (.blockSize file-mgr)
+        pg (p/make-page block-size)]
+    (Buffer. file-mgr
+             pg
+             log-mgr
+             (transient {:block nil
+                         :pin-count 0
+                         :txid -1
+                         :lsn -1}))))

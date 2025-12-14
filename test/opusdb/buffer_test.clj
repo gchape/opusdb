@@ -1,16 +1,15 @@
 (ns opusdb.buffer-test
-  (:require [clojure.test :refer [deftest testing is use-fixtures]]
+  (:require [clojure.test :refer [deftest is use-fixtures testing]]
             [opusdb.buffer :as buffer]
             [opusdb.file :as file]
             [opusdb.log :as log])
   (:import [java.io File]))
 
-(defn setup [pool-size]
+(defn setup []
   (let [file-mgr (file/make-file-mgr "test-db" 400)
         log-mgr (log/make-log-mgr file-mgr "test-log")]
     {:file-mgr file-mgr
-     :log-mgr log-mgr
-     :buffer-mgr (buffer/make-buffer-mgr file-mgr log-mgr pool-size)}))
+     :log-mgr log-mgr}))
 
 (defn ensure-block-exists [file-mgr block]
   (when-not (.exists (File. (str (:db-dir file-mgr) "/" (:file-name block))))
@@ -28,160 +27,119 @@
 
 (use-fixtures :each cleanup-fixture)
 
-;; Buffer Tests
 (deftest buffer-initial-state
-  (let [{:keys [file-mgr log-mgr]} (setup 3)
-        buf (buffer/make-buffer file-mgr log-mgr)]
-    (is (= -1 (.txId buf)))
-    (is (nil? (.block buf)))
-    (is (false? (.isPinned buf)))))
+  (testing "Buffer should start with proper initial state"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)]
+      (is (= -1 (buffer/txid buf)) "Initial txid should be -1")
+      (is (= -1 (buffer/lsn buf)) "Initial lsn should be -1")
+      (is (nil? (buffer/block buf)) "Initial block should be nil")
+      (is (false? (buffer/pinned? buf)) "Buffer should not be pinned initially")
+      (is (= 0 (buffer/pin-count buf)) "Pin count should be 0"))))
 
 (deftest buffer-pinning
-  (let [{:keys [file-mgr log-mgr]} (setup 3)
-        buf (buffer/make-buffer file-mgr log-mgr)]
-    (is (false? (.isPinned buf)))
-    (.pin buf)
-    (is (true? (.isPinned buf)))
-    (.pin buf)
-    (is (true? (.isPinned buf)))
-    (.unpin buf)
-    (is (true? (.isPinned buf)))
-    (.unpin buf)
-    (is (false? (.isPinned buf)))))
+  (testing "Buffer pin and unpin operations"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)]
+      (is (false? (buffer/pinned? buf)) "Buffer starts unpinned")
+      (is (= 0 (buffer/pin-count buf)))
+
+      (buffer/pin buf)
+      (is (true? (buffer/pinned? buf)) "Buffer is pinned after pin")
+      (is (= 1 (buffer/pin-count buf)))
+
+      (buffer/pin buf)
+      (is (true? (buffer/pinned? buf)) "Buffer is still pinned after second pin")
+      (is (= 2 (buffer/pin-count buf)))
+
+      (buffer/unpin buf)
+      (is (true? (buffer/pinned? buf)) "Buffer is still pinned after one unpin")
+      (is (= 1 (buffer/pin-count buf)))
+
+      (buffer/unpin buf)
+      (is (false? (buffer/pinned? buf)) "Buffer is unpinned after matching unpins")
+      (is (= 0 (buffer/pin-count buf))))))
 
 (deftest buffer-mark-dirty
-  (let [{:keys [file-mgr log-mgr]} (setup 3)
-        buf (buffer/make-buffer file-mgr log-mgr)]
-    (is (= -1 (.txId buf)))
-    (.markDirty buf 42 100)
-    (is (= 42 (.txId buf)))
-    (is (thrown? IllegalArgumentException (.markDirty buf -5 200)))
-    (.markDirty buf 10 -1)
-    (is (= 10 (.txId buf)))))
+  (testing "Buffer mark dirty with valid transaction ID"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)]
+      (is (= -1 (buffer/txid buf)))
+
+      (buffer/mark-dirty buf 42 100)
+      (is (= 42 (buffer/txid buf)) "Transaction ID should be updated")
+      (is (= 100 (buffer/lsn buf)) "LSN should be updated")
+
+      (buffer/mark-dirty buf 10 200)
+      (is (= 10 (buffer/txid buf)) "Transaction ID should be updated again")
+      (is (= 200 (buffer/lsn buf)) "LSN should be updated again")))
+
+  (testing "Buffer mark dirty with negative LSN preserves old LSN"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)]
+      (buffer/mark-dirty buf 42 100)
+      (buffer/mark-dirty buf 10 -1)
+      (is (= 10 (buffer/txid buf)) "Transaction ID should be updated")
+      (is (= 100 (buffer/lsn buf)) "LSN should not change when negative")))
+
+  (testing "Buffer mark dirty with negative transaction ID throws exception"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)]
+      (is (thrown? IllegalArgumentException
+                   (buffer/mark-dirty buf -5 200))
+          "Negative transaction ID should throw exception"))))
 
 (deftest buffer-flush-without-block
-  (let [{:keys [file-mgr log-mgr]} (setup 3)
-        buf (buffer/make-buffer file-mgr log-mgr)]
-    (.markDirty buf 42 100)
-    (is (thrown-with-msg? IllegalStateException
-                          #"Cannot flush: buffer has no assigned block"
-                          (.flush buf)))))
+  (testing "Flushing buffer without assigned block throws exception"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)]
+      (buffer/mark-dirty buf 42 100)
+      (is (thrown-with-msg? IllegalStateException
+                            #"Cannot flush: buffer has no assigned block"
+                            (buffer/flush buf))))))
+
+(deftest buffer-flush-clean-buffer
+  (testing "Flushing clean buffer (txid=-1) does nothing"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)
+          blk {:file-name "f1" :block-id 0}]
+      (ensure-block-exists file-mgr blk)
+      (buffer/assign-to-block buf blk)
+      (is (= -1 (buffer/txid buf)))
+      (buffer/flush buf) ; Should not throw
+      (is (= -1 (buffer/txid buf))))))
 
 (deftest buffer-assign-and-flush
-  (let [{:keys [file-mgr log-mgr]} (setup 3)
-        buf (buffer/make-buffer file-mgr log-mgr)
-        blk1 {:file-name "f1" :block-id 0}
-        blk2 {:file-name "f1" :block-id 1}]
-    (ensure-block-exists file-mgr blk1)
-    (ensure-block-exists file-mgr blk2)
-    (.assignToBlock buf blk1)
-    (is (= blk1 (.block buf)))
-    (is (false? (.isPinned buf)))
-    (.markDirty buf 42 100)
-    (.assignToBlock buf blk2)
-    (is (= blk2 (.block buf)))
-    (is (= -1 (.txId buf)))))
+  (testing "Buffer assignment and flushing"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)
+          blk1 {:file-name "f1" :block-id 0}
+          blk2 {:file-name "f1" :block-id 1}]
+      (ensure-block-exists file-mgr blk1)
+      (ensure-block-exists file-mgr blk2)
 
-;; Buffer Manager Tests
-(deftest buffer-mgr-available-count
-  (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-        blk {:file-name "f1" :block-id 0}]
-    (ensure-block-exists file-mgr blk)
-    (is (= 3 (.available buffer-mgr)))
-    (let [buf1 (.pin buffer-mgr blk)]
-      (is (= 2 (.available buffer-mgr)))
-      (let [buf2 (.pin buffer-mgr blk)]
-        (is (= buf1 buf2))
-        (is (= 2 (.available buffer-mgr))))
-      (.unpin buffer-mgr buf1)
-      (is (= 2 (.available buffer-mgr)))
-      (.unpin buffer-mgr buf1)
-      (is (= 3 (.available buffer-mgr))))))
+      (buffer/assign-to-block buf blk1)
+      (is (= blk1 (buffer/block buf)) "Block should be assigned")
+      (is (false? (buffer/pinned? buf)) "Buffer should not be pinned after assignment")
+      (is (= -1 (buffer/txid buf)) "Transaction ID should be -1 after assignment")
 
-(deftest buffer-mgr-multiple-blocks
-  (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-        blk1 {:file-name "f1" :block-id 0}
-        blk2 {:file-name "f1" :block-id 1}
-        blk3 {:file-name "f2" :block-id 0}]
-    (ensure-block-exists file-mgr blk1)
-    (ensure-block-exists file-mgr blk2)
-    (ensure-block-exists file-mgr blk3)
-    (let [buf1 (.pin buffer-mgr blk1)
-          buf2 (.pin buffer-mgr blk2)
-          buf3 (.pin buffer-mgr blk3)]
-      (is (not= buf1 buf2))
-      (is (not= buf2 buf3))
-      (is (not= buf1 buf3))
-      (is (= 0 (.available buffer-mgr)))
-      (is (= blk1 (.block buf1)))
-      (is (= blk2 (.block buf2)))
-      (is (= blk3 (.block buf3))))))
+      (buffer/mark-dirty buf 42 100)
+      (is (= 42 (buffer/txid buf)) "Buffer should be dirty")
 
-(deftest buffer-mgr-reuse
-  (let [{:keys [file-mgr buffer-mgr]} (setup 2)
-        blk1 {:file-name "f1" :block-id 0}
-        blk2 {:file-name "f1" :block-id 1}
-        blk3 {:file-name "f1" :block-id 2}]
-    (ensure-block-exists file-mgr blk1)
-    (ensure-block-exists file-mgr blk2)
-    (ensure-block-exists file-mgr blk3)
-    (let [buf1 (.pin buffer-mgr blk1)]
-      (.pin buffer-mgr blk2)
-      (is (= 0 (.available buffer-mgr)))
-      (.unpin buffer-mgr buf1)
-      (is (= 1 (.available buffer-mgr)))
-      (let [buf3 (.pin buffer-mgr blk3)]
-        (is (= buf1 buf3))
-        (is (= blk3 (.block buf3)))
-        (is (= 0 (.available buffer-mgr)))))))
+      (buffer/assign-to-block buf blk2)
+      (is (= blk2 (buffer/block buf)) "Block should be reassigned")
+      (is (= -1 (buffer/txid buf)) "Transaction ID should be reset after flush during assignment"))))
 
-(deftest buffer-mgr-timeout
-  (let [{:keys [file-mgr buffer-mgr]} (setup 1)
-        blk1 {:file-name "f1" :block-id 0}
-        blk2 {:file-name "f1" :block-id 1}]
-    (ensure-block-exists file-mgr blk1)
-    (ensure-block-exists file-mgr blk2)
-    (.pin buffer-mgr blk1)
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"Buffer abort: waiting too long"
-                          (.pin buffer-mgr blk2)))))
+(deftest buffer-explicit-flush
+  (testing "Explicit buffer flush resets transaction ID"
+    (let [{:keys [file-mgr log-mgr]} (setup)
+          buf (buffer/make-buffer file-mgr log-mgr)
+          blk {:file-name "f1" :block-id 0}]
+      (ensure-block-exists file-mgr blk)
+      (buffer/assign-to-block buf blk)
+      (buffer/mark-dirty buf 42 100)
+      (is (= 42 (buffer/txid buf)))
 
-(deftest buffer-mgr-flush-all
-  (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-        blk1 {:file-name "f1" :block-id 0}
-        blk2 {:file-name "f1" :block-id 1}
-        blk3 {:file-name "f1" :block-id 2}]
-    (ensure-block-exists file-mgr blk1)
-    (ensure-block-exists file-mgr blk2)
-    (ensure-block-exists file-mgr blk3)
-    (let [buf1 (.pin buffer-mgr blk1)
-          buf2 (.pin buffer-mgr blk2)
-          buf3 (.pin buffer-mgr blk3)]
-      (.markDirty buf1 10 100)
-      (.markDirty buf2 10 101)
-      (.markDirty buf3 20 102)
-      (.flushAll buffer-mgr 10)
-      (is (= -1 (.txId buf1)))
-      (is (= -1 (.txId buf2)))
-      (is (= 20 (.txId buf3))))))
-
-(deftest buffer-mgr-concurrent
-  (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-        blk {:file-name "f1" :block-id 0}
-        results (atom [])]
-    (ensure-block-exists file-mgr blk)
-    (let [threads (repeatedly 5
-                              #(Thread.
-                                (fn []
-                                  (try
-                                    (let [buf (.pin buffer-mgr blk)]
-                                      (Thread/sleep 10)
-                                      (.unpin buffer-mgr buf)
-                                      (swap! results conj :success))
-                                    (catch Exception _
-                                      (swap! results conj :error))))))]
-      (doseq [t threads] (.start t))
-      (doseq [t threads] (.join t))
-      (is (= 5 (count @results)))
-      (is (every? #(= :success %) @results))
-      (is (= 3 (.available buffer-mgr))))))
+      (buffer/flush buf)
+      (is (= -1 (buffer/txid buf)) "Transaction ID should be reset after flush")
+      (is (= blk (buffer/block buf)) "Block should remain assigned"))))
