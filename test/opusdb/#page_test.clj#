@@ -1,6 +1,6 @@
 (ns opusdb.page-test
   (:require [clojure.test :as test]
-            [opusdb.page :as page]))
+            [opusdb.page :as p]))
 
 (test/deftest test-make-page-with-long
   (test/testing "Creating a page with a block size"

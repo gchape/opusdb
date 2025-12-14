@@ -1,6 +1,7 @@
 (ns opusdb.log
-  (:refer-clojure :exclude [+ - inc])
-  (:require [opusdb.page :as page])
+  (:refer-clojure :exclude [+ - inc flush])
+  (:require [opusdb.page :as p]
+            [opusdb.file :as fm])
   (:import [opusdb.page Page]
            [opusdb.file FileMgr]))
 
@@ -14,85 +15,77 @@
 (def inc
   (fn* [x] (unchecked-inc-int x)))
 
-(definterface ILogMgr
-  (^void flush [])
-  (^void flush [^int lsn])
-  (^int append [^bytes record])
-  (^clojure.lang.IPersistentVector getSnapshot []))
-
-(deftype LogMgr [^FileMgr fileMgr
-                 ^String fileName
+(deftype LogMgr [^FileMgr file-mgr
+                 ^String file-name
                  ^Page page
-                 ^:unsynchronized-mutable ^clojure.lang.IPersistentMap block
-                 ^:unsynchronized-mutable ^int last-saved-lsn
-                 ^:unsynchronized-mutable ^int latest-lsn]
+                 ^clojure.lang.ITransientMap state]
 
-  ILogMgr
-
-  (append [this record]
-    (locking this
-      (let [boundary (.getInt page 0)
-            length (alength record)
-            bytes-needed (+ length 4)]
-        (when (< (- boundary bytes-needed) 4)
-          (.flush this)
-          (let [new-block (.append fileMgr fileName)
-                free-boundary (.blockSize fileMgr)]
-            (.setInt page 0 free-boundary)
-            (set! block new-block)
-            (.write fileMgr block page)))
-        (let [boundary (.getInt page 0)
-              position (- boundary bytes-needed)]
-          (.setBytes page position record)
-          (.setInt page 0 position)
-          (set! latest-lsn (int (inc latest-lsn)))
-          latest-lsn))))
-
-  (flush [_]
-    (.write fileMgr block page)
-    (set! last-saved-lsn latest-lsn))
-
-  (flush [this lsn]
-    (when (>= lsn last-saved-lsn)
-      (.flush this)))
-
-  (getSnapshot [_]
-    (let [block-size (.blockSize fileMgr)
-          ^Page tmp-page (page/make-page (byte-array block-size))]
-      (loop [b block
+  clojure.lang.Seqable
+  (^clojure.lang.ISeq seq [_]
+    (let [block-size (fm/block-size file-mgr)
+          ^Page page (p/make-page (byte-array block-size))]
+      (loop [% (state :block-id)
              position nil
-             result []]
+             result '()]
         (let [position (or position
                            (do
-                             (.read fileMgr b tmp-page)
-                             (.getInt tmp-page 0)))
-              block-id (:block-id b)]
+                             (fm/read file-mgr % page)
+                             (.getInt page 0)))
+              index (:index %)]
           (cond
-            ;; reached first block completely scanned
-            (and (zero? block-id) (>= position block-size))
+            (and (zero? index) (>= position block-size))
             result
 
-            ;; move to previous block
             (>= position block-size)
-            (recur {:file-name fileName :block-id (dec block-id)} nil result)
+            (recur {:file-name file-name :index (dec index)} nil result)
 
             :else
-            (let [rec (.getBytes tmp-page position)
+            (let [rec (.getBytes page position)
                   next-pos (+ 4 position (alength rec))]
-              (recur b next-pos (conj result rec)))))))))
+              (recur % next-pos (cons rec result)))))))))
+(defn flush
+  ([^LogMgr log-mgr]
+   (fm/write (.-file-mgr log-mgr) ((.-state log-mgr) :block-id) (.-page log-mgr))
+   (assoc! (.-state log-mgr) :last-saved-lsn ((.-state log-mgr) :latest-lsn)))
+  ([^LogMgr log-mgr lsn]
+   (when (>= lsn ((.-state log-mgr) :last-saved-lsn))
+     (flush log-mgr))))
+
+(defn append [^LogMgr log-mgr ^bytes rec]
+  (locking log-mgr
+    (let [boundary (.getInt ^Page (.-page log-mgr) 0)
+          length (alength rec)
+          bytes-needed (+ length 4)]
+      (when (< (- boundary bytes-needed) 4)
+        (flush log-mgr)
+        (let [new-block-id (fm/append (.-file-mgr log-mgr) (.-file-name log-mgr))
+              free-boundary (fm/block-size (.-file-mgr log-mgr))]
+          (.setInt ^Page (.-page log-mgr) 0 free-boundary)
+          (assoc! (.-state log-mgr) :block-id new-block-id)
+          (fm/write (.-file-mgr log-mgr) new-block-id (.-page log-mgr))))
+      (let [boundary (.getInt ^Page (.-page log-mgr) 0)
+            position (- boundary bytes-needed)
+            state (.-state log-mgr)]
+        (.setBytes ^Page (.-page log-mgr) position rec)
+        (.setInt ^Page (.-page log-mgr) 0 position)
+        (assoc! state :latest-lsn (inc (state :latest-lsn)))
+        (state :latest-lsn)))))
 
 (defn make-log-mgr
   [^FileMgr file-mgr ^String file-name]
-  (let [^Page page (page/make-page (long (.blockSize file-mgr)))
-        file-size (.fileSize file-mgr file-name)
-        block (if (zero? file-size)
-                (let [block (.append file-mgr file-name)
-                      boundary (.blockSize file-mgr)]
-                  (.setInt page 0 boundary)
-                  (.write file-mgr block page)
-                  block)
-                (let [block {:file-name file-name
-                             :block-id (dec (quot file-size (.blockSize file-mgr)))}]
-                  (.read file-mgr block page)
-                  block))]
-    (->LogMgr file-mgr file-name page block 0 0)))
+  (let [^Page page (p/make-page (long (fm/block-size file-mgr)))
+        file-size (fm/file-size file-mgr file-name)
+        block-id (if (zero? file-size)
+                   (let [block-id (fm/append file-mgr file-name)
+                         boundary (fm/block-size file-mgr)]
+                     (.setInt page 0 boundary)
+                     (fm/write file-mgr block-id page)
+                     block-id)
+                   (let [block-id {:file-name file-name
+                                   :index (dec (quot file-size (fm/block-size file-mgr)))}]
+                     (fm/read file-mgr block-id page)
+                     block-id))
+        state (transient {:block-id block-id
+                          :last-saved-lsn 0
+                          :latest-lsn 0})]
+    (->LogMgr file-mgr file-name page state)))

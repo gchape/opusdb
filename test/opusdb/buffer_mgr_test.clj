@@ -1,21 +1,21 @@
 (ns opusdb.buffer-mgr-test
   (:require [clojure.test :refer [deftest is use-fixtures testing]]
-            [opusdb.buffer :as buffer]
-            [opusdb.buffer-mgr :as mgr]
-            [opusdb.file :as file]
-            [opusdb.log :as log])
+            [opusdb.buffer :as b]
+            [opusdb.buffer-mgr :as bm]
+            [opusdb.file :as fm]
+            [opusdb.log :as lm])
   (:import [java.io File]))
 
 (defn setup [pool-size]
-  (let [file-mgr (file/make-file-mgr "test-db" 400)
-        log-mgr (log/make-log-mgr file-mgr "test-log")]
-    {:file-mgr file-mgr
-     :log-mgr log-mgr
-     :buffer-mgr (mgr/make-buffer-mgr file-mgr log-mgr pool-size)}))
+  (let [file-bm (fm/make-file-mgr "test-db" 400)
+        log-bm (lm/make-log-mgr file-bm "test-log")]
+    {:file-bm file-bm
+     :log-bm log-bm
+     :buffer-bm (bm/make-buffer-mgr file-bm log-bm pool-size)}))
 
-(defn ensure-block-exists [file-mgr block]
-  (when-not (.exists (File. (str (:db-dir file-mgr) "/" (:file-name block))))
-    (.append file-mgr (:file-name block))))
+(defn ensure-block-exists [file-bm block-id]
+  (when-not (.exists (File. (str (:db-dir file-bm) "/" (:file-name block-id))))
+    (fm/append file-bm (:file-name block-id))))
 
 (defn cleanup-fixture [f]
   (try
@@ -29,154 +29,154 @@
 
 (use-fixtures :each cleanup-fixture)
 
-(deftest buffer-mgr-initial-state
-  (testing "BufferMgr initial state"
-    (let [{:keys [buffer-mgr]} (setup 3)]
-      (is (= 3 (mgr/available buffer-mgr))
+(deftest buffer-bm-initial-state
+  (testing "BufferBm initial state"
+    (let [{:keys [buffer-bm]} (setup 3)]
+      (is (= 3 (bm/available buffer-bm))
           "All buffers should be available initially"))))
 
-(deftest buffer-mgr-available-count
-  (testing "BufferMgr available count tracking"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-          blk {:file-name "f1" :block-id 0}]
-      (ensure-block-exists file-mgr blk)
+(deftest buffer-bm-available-count
+  (testing "BufferBm available count tracking"
+    (let [{:keys [file-bm buffer-bm]} (setup 3)
+          block-id {:file-name "f1" :index 0}]
+      (ensure-block-exists file-bm block-id)
 
-      (is (= 3 (mgr/available buffer-mgr)) "Initial available count")
+      (is (= 3 (bm/available buffer-bm)) "Initial available count")
 
-      (let [buf1 (mgr/pin-buffer buffer-mgr blk)]
-        (is (= 2 (mgr/available buffer-mgr))
+      (let [buffer1 (bm/pin-buffer buffer-bm block-id)]
+        (is (= 2 (bm/available buffer-bm))
             "Available count decreases after pinning")
 
-        (let [buf2 (mgr/pin-buffer buffer-mgr blk)]
-          (is (= buf1 buf2) "Same buffer returned for same block")
-          (is (= 2 (mgr/available buffer-mgr))
+        (let [buf2 (bm/pin-buffer buffer-bm block-id)]
+          (is (= buffer1 buf2) "Same buffer returned for same block")
+          (is (= 2 (bm/available buffer-bm))
               "Available count unchanged when pinning same buffer"))
 
-        (mgr/unpin-buffer buffer-mgr buf1)
-        (is (= 2 (mgr/available buffer-mgr))
+        (bm/unpin-buffer buffer-bm buffer1)
+        (is (= 2 (bm/available buffer-bm))
             "Available count unchanged after first unpin (still pinned)")
 
-        (mgr/unpin-buffer buffer-mgr buf1)
-        (is (= 3 (mgr/available buffer-mgr))
+        (bm/unpin-buffer buffer-bm buffer1)
+        (is (= 3 (bm/available buffer-bm))
             "Available count increases when buffer fully unpinned")))))
 
-(deftest buffer-mgr-multiple-blocks
-  (testing "BufferMgr handling multiple blocks"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-          blk1 {:file-name "f1" :block-id 0}
-          blk2 {:file-name "f1" :block-id 1}
-          blk3 {:file-name "f2" :block-id 0}]
-      (ensure-block-exists file-mgr blk1)
-      (ensure-block-exists file-mgr blk2)
-      (ensure-block-exists file-mgr blk3)
+(deftest buffer-bm-multiple-blocks
+  (testing "BufferBm handling multiple blocks"
+    (let [{:keys [file-bm buffer-bm]} (setup 3)
+          block-id1 {:file-name "f1" :index 0}
+          block-id2 {:file-name "f1" :index 1}
+          block-id3 {:file-name "f2" :index 0}]
+      (ensure-block-exists file-bm block-id1)
+      (ensure-block-exists file-bm block-id2)
+      (ensure-block-exists file-bm block-id3)
 
-      (let [buf1 (mgr/pin-buffer buffer-mgr blk1)
-            buf2 (mgr/pin-buffer buffer-mgr blk2)
-            buf3 (mgr/pin-buffer buffer-mgr blk3)]
-        (is (not= buf1 buf2) "Different buffers for different blocks")
+      (let [buffer1 (bm/pin-buffer buffer-bm block-id1)
+            buf2 (bm/pin-buffer buffer-bm block-id2)
+            buf3 (bm/pin-buffer buffer-bm block-id3)]
+        (is (not= buffer1 buf2) "Different buffers for different blocks")
         (is (not= buf2 buf3) "Different buffers for different blocks")
-        (is (not= buf1 buf3) "Different buffers for different blocks")
+        (is (not= buffer1 buf3) "Different buffers for different blocks")
 
-        (is (= 0 (mgr/available buffer-mgr))
+        (is (= 0 (bm/available buffer-bm))
             "No buffers available when all are pinned")
 
-        (is (= blk1 (buffer/block buf1)) "Buffer 1 has correct block")
-        (is (= blk2 (buffer/block buf2)) "Buffer 2 has correct block")
-        (is (= blk3 (buffer/block buf3)) "Buffer 3 has correct block")))))
+        (is (= block-id1 (b/block-id buffer1)) "Buffer 1 has correct block")
+        (is (= block-id2 (b/block-id buf2)) "Buffer 2 has correct block")
+        (is (= block-id3 (b/block-id buf3)) "Buffer 3 has correct block")))))
 
-(deftest buffer-mgr-reuse
-  (testing "BufferMgr reuses unpinned buffers"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 2)
-          blk1 {:file-name "f1" :block-id 0}
-          blk2 {:file-name "f1" :block-id 1}
-          blk3 {:file-name "f1" :block-id 2}]
-      (ensure-block-exists file-mgr blk1)
-      (ensure-block-exists file-mgr blk2)
-      (ensure-block-exists file-mgr blk3)
+(deftest buffer-bm-reuse
+  (testing "BufferBm reuses unpinned buffers"
+    (let [{:keys [file-bm buffer-bm]} (setup 2)
+          block-id1 {:file-name "f1" :index 0}
+          block-id2 {:file-name "f1" :index 1}
+          block-id3 {:file-name "f1" :index 2}]
+      (ensure-block-exists file-bm block-id1)
+      (ensure-block-exists file-bm block-id2)
+      (ensure-block-exists file-bm block-id3)
 
-      (let [buf1 (mgr/pin-buffer buffer-mgr blk1)]
-        (mgr/pin-buffer buffer-mgr blk2)
-        (is (= 0 (mgr/available buffer-mgr)))
+      (let [buffer1 (bm/pin-buffer buffer-bm block-id1)]
+        (bm/pin-buffer buffer-bm block-id2)
+        (is (= 0 (bm/available buffer-bm)))
 
-        (mgr/unpin-buffer buffer-mgr buf1)
-        (is (= 1 (mgr/available buffer-mgr)))
+        (bm/unpin-buffer buffer-bm buffer1)
+        (is (= 1 (bm/available buffer-bm)))
 
-        (let [buf3 (mgr/pin-buffer buffer-mgr blk3)]
-          (is (= buf1 buf3) "Unpinned buffer should be reused")
-          (is (= blk3 (buffer/block buf3)) "Reused buffer has new block")
-          (is (= 0 (mgr/available buffer-mgr))))))))
+        (let [buf3 (bm/pin-buffer buffer-bm block-id3)]
+          (is (= buffer1 buf3) "Unpinned buffer should be reused")
+          (is (= block-id3 (b/block-id buf3)) "Reused buffer has new block")
+          (is (= 0 (bm/available buffer-bm))))))))
 
-(deftest buffer-mgr-timeout
-  (testing "BufferMgr timeout when no buffers available"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 1)
-          blk1 {:file-name "f1" :block-id 0}
-          blk2 {:file-name "f1" :block-id 1}]
-      (ensure-block-exists file-mgr blk1)
-      (ensure-block-exists file-mgr blk2)
+(deftest buffer-bm-timeout
+  (testing "BufferBm timeout when no buffers available"
+    (let [{:keys [file-bm buffer-bm]} (setup 1)
+          block-id1 {:file-name "f1" :index 0}
+          block-id2 {:file-name "f1" :index 1}]
+      (ensure-block-exists file-bm block-id1)
+      (ensure-block-exists file-bm block-id2)
 
-      (mgr/pin-buffer buffer-mgr blk1)
+      (bm/pin-buffer buffer-bm block-id1)
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Buffer abort: waiting too long"
-                            (mgr/pin-buffer buffer-mgr blk2))
+                            (bm/pin-buffer buffer-bm block-id2))
           "Should timeout when no buffers available"))))
 
-(deftest buffer-mgr-flush-all
-  (testing "BufferMgr flush-all for specific transaction"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-          blk1 {:file-name "f1" :block-id 0}
-          blk2 {:file-name "f1" :block-id 1}
-          blk3 {:file-name "f1" :block-id 2}]
-      (ensure-block-exists file-mgr blk1)
-      (ensure-block-exists file-mgr blk2)
-      (ensure-block-exists file-mgr blk3)
+(deftest buffer-bm-flush-all
+  (testing "BufferBm flush-all for specific transaction"
+    (let [{:keys [file-bm buffer-bm]} (setup 3)
+          block-id1 {:file-name "f1" :index 0}
+          block-id2 {:file-name "f1" :index 1}
+          block-id3 {:file-name "f1" :index 2}]
+      (ensure-block-exists file-bm block-id1)
+      (ensure-block-exists file-bm block-id2)
+      (ensure-block-exists file-bm block-id3)
 
-      (let [buf1 (mgr/pin-buffer buffer-mgr blk1)
-            buf2 (mgr/pin-buffer buffer-mgr blk2)
-            buf3 (mgr/pin-buffer buffer-mgr blk3)]
-        (buffer/mark-dirty buf1 10 100)
-        (buffer/mark-dirty buf2 10 101)
-        (buffer/mark-dirty buf3 20 102)
+      (let [buffer1 (bm/pin-buffer buffer-bm block-id1)
+            buffer2 (bm/pin-buffer buffer-bm block-id2)
+            buf3 (bm/pin-buffer buffer-bm block-id3)]
+        (b/mark-dirty buffer1 10 100)
+        (b/mark-dirty buffer2 10 101)
+        (b/mark-dirty buf3 20 102)
 
-        (mgr/flush-all buffer-mgr 10)
+        (bm/flush-all buffer-bm 10)
 
-        (is (= -1 (buffer/txid buf1)) "Buffer 1 should be flushed")
-        (is (= -1 (buffer/txid buf2)) "Buffer 2 should be flushed")
-        (is (= 20 (buffer/txid buf3)) "Buffer 3 should not be flushed")))))
+        (is (= -1 (b/txid buffer1)) "Buffer 1 should be flushed")
+        (is (= -1 (b/txid buffer2)) "Buffer 2 should be flushed")
+        (is (= 20 (b/txid buf3)) "Buffer 3 should not be flushed")))))
 
-(deftest buffer-mgr-flush-all-selective
-  (testing "BufferMgr flush-all only affects specified transaction"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 4)
-          blocks (map #(hash-map :file-name "f1" :block-id %) (range 4))]
-      (doseq [blk blocks]
-        (ensure-block-exists file-mgr blk))
+(deftest buffer-bm-flush-all-selective
+  (testing "BufferBm flush-all only affects specified transaction"
+    (let [{:keys [file-bm buffer-bm]} (setup 4)
+          blocks (map #(hash-map :file-name "f1" :index %) (range 4))]
+      (doseq [block-id blocks]
+        (ensure-block-exists file-bm block-id))
 
-      (let [buffers (mapv #(mgr/pin-buffer buffer-mgr %) blocks)]
-        (buffer/mark-dirty (nth buffers 0) 100 1000)
-        (buffer/mark-dirty (nth buffers 1) 100 1001)
-        (buffer/mark-dirty (nth buffers 2) 200 1002)
-        (buffer/mark-dirty (nth buffers 3) 300 1003)
+      (let [buffers (mapv #(bm/pin-buffer buffer-bm %) blocks)]
+        (b/mark-dirty (nth buffers 0) 100 1000)
+        (b/mark-dirty (nth buffers 1) 100 1001)
+        (b/mark-dirty (nth buffers 2) 200 1002)
+        (b/mark-dirty (nth buffers 3) 300 1003)
 
-        (mgr/flush-all buffer-mgr 100)
+        (bm/flush-all buffer-bm 100)
 
-        (is (= -1 (buffer/txid (nth buffers 0))))
-        (is (= -1 (buffer/txid (nth buffers 1))))
-        (is (= 200 (buffer/txid (nth buffers 2))))
-        (is (= 300 (buffer/txid (nth buffers 3))))))))
+        (is (= -1 (b/txid (nth buffers 0))))
+        (is (= -1 (b/txid (nth buffers 1))))
+        (is (= 200 (b/txid (nth buffers 2))))
+        (is (= 300 (b/txid (nth buffers 3))))))))
 
-(deftest buffer-mgr-concurrent
-  (testing "BufferMgr concurrent access"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-          blk {:file-name "f1" :block-id 0}
+(deftest buffer-bm-concurrent
+  (testing "BufferBm concurrent access"
+    (let [{:keys [file-bm buffer-bm]} (setup 3)
+          block-id {:file-name "f1" :index 0}
           results (atom [])]
-      (ensure-block-exists file-mgr blk)
+      (ensure-block-exists file-bm block-id)
 
       (let [threads (repeatedly 5
                                 #(Thread.
                                   (fn []
                                     (try
-                                      (let [buf (mgr/pin-buffer buffer-mgr blk)]
+                                      (let [buf (bm/pin-buffer buffer-bm block-id)]
                                         (Thread/sleep 10)
-                                        (mgr/unpin-buffer buffer-mgr buf)
+                                        (bm/unpin-buffer buffer-bm buf)
                                         (swap! results conj :success))
                                       (catch Exception _
                                         (swap! results conj :error))))))]
@@ -185,42 +185,42 @@
 
         (is (= 5 (count @results)) "All threads completed")
         (is (every? #(= :success %) @results) "All threads succeeded")
-        (is (= 3 (mgr/available buffer-mgr))
+        (is (= 3 (bm/available buffer-bm))
             "All buffers available after concurrent access")))))
 
-(deftest buffer-mgr-pin-same-block-multiple-times
+(deftest buffer-bm-pin-same-block-multiple-times
   (testing "Pinning same block multiple times returns same buffer"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 3)
-          blk {:file-name "f1" :block-id 0}]
-      (ensure-block-exists file-mgr blk)
+    (let [{:keys [file-bm buffer-bm]} (setup 3)
+          block-id {:file-name "f1" :index 0}]
+      (ensure-block-exists file-bm block-id)
 
-      (let [buf1 (mgr/pin-buffer buffer-mgr blk)
-            buf2 (mgr/pin-buffer buffer-mgr blk)
-            buf3 (mgr/pin-buffer buffer-mgr blk)]
-        (is (= buf1 buf2 buf3) "All returns should be same buffer")
-        (is (= 3 (buffer/pin-count buf1)) "Pin count should be 3")
-        (is (= 2 (mgr/available buffer-mgr))
+      (let [buffer1 (bm/pin-buffer buffer-bm block-id)
+            buffer2 (bm/pin-buffer buffer-bm block-id)
+            buffer3 (bm/pin-buffer buffer-bm block-id)]
+        (is (= buffer1 buffer2 buffer3) "All returns should be same buffer")
+        (is (= 3 (b/pin-count buffer1)) "Pin count should be 3")
+        (is (= 2 (bm/available buffer-bm))
             "Only one buffer unavailable")))))
 
-(deftest buffer-mgr-unpin-decrements-correctly
+(deftest buffer-bm-unpin-decrements-correctly
   (testing "Unpinning decrements pin count correctly"
-    (let [{:keys [file-mgr buffer-mgr]} (setup 2)
-          blk {:file-name "f1" :block-id 0}]
-      (ensure-block-exists file-mgr blk)
+    (let [{:keys [file-bm buffer-bm]} (setup 2)
+          block-id {:file-name "f1" :index 0}]
+      (ensure-block-exists file-bm block-id)
 
-      (let [buf (mgr/pin-buffer buffer-mgr blk)]
-        (mgr/pin-buffer buffer-mgr blk)
-        (mgr/pin-buffer buffer-mgr blk)
-        (is (= 3 (buffer/pin-count buf)))
+      (let [buffer (bm/pin-buffer buffer-bm block-id)]
+        (bm/pin-buffer buffer-bm block-id)
+        (bm/pin-buffer buffer-bm block-id)
+        (is (= 3 (b/pin-count buffer)))
 
-        (mgr/unpin-buffer buffer-mgr buf)
-        (is (= 2 (buffer/pin-count buf)))
-        (is (= 1 (mgr/available buffer-mgr)) "Still pinned")
+        (bm/unpin-buffer buffer-bm buffer)
+        (is (= 2 (b/pin-count buffer)))
+        (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
-        (mgr/unpin-buffer buffer-mgr buf)
-        (is (= 1 (buffer/pin-count buf)))
-        (is (= 1 (mgr/available buffer-mgr)) "Still pinned")
+        (bm/unpin-buffer buffer-bm buffer)
+        (is (= 1 (b/pin-count buffer)))
+        (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
-        (mgr/unpin-buffer buffer-mgr buf)
-        (is (= 0 (buffer/pin-count buf)))
-        (is (= 2 (mgr/available buffer-mgr)) "Now unpinned")))))
+        (bm/unpin-buffer buffer-bm buffer)
+        (is (= 0 (b/pin-count buffer)))
+        (is (= 2 (bm/available buffer-bm)) "Now unpinned")))))
