@@ -1,19 +1,9 @@
 (ns opusdb.log
-  (:refer-clojure :exclude [+ - inc flush])
+  (:refer-clojure :exclude [flush])
   (:require [opusdb.page :as p]
             [opusdb.file :as fm])
   (:import [opusdb.page Page]
            [opusdb.file FileMgr]))
-
-(def +
-  (fn* [x y & more]
-       (reduce unchecked-add-int 0 (into [x y] more))))
-
-(def -
-  (fn* [x y] (unchecked-subtract-int x y)))
-
-(def inc
-  (fn* [x] (unchecked-inc-int x)))
 
 (deftype LogMgr [^FileMgr file-mgr
                  ^String file-name
@@ -23,26 +13,21 @@
   clojure.lang.Seqable
   (^clojure.lang.ISeq seq [_]
     (let [block-size (fm/block-size file-mgr)
-          ^Page page (p/make-page (byte-array block-size))]
-      (loop [% (state :block-id)
-             position nil
-             result '()]
-        (let [position (or position
-                           (do
-                             (fm/read file-mgr % page)
-                             (.getInt page 0)))
-              index (:index %)]
-          (cond
-            (and (zero? index) (>= position block-size))
-            result
+          ^Page page (p/make-page (byte-array block-size))
+          block-id (state :block-id)]
+      (reduce (fn [result index]
+                (let [block-id (assoc block-id :index index)
+                      _ (fm/read file-mgr block-id page)]
+                  (loop [position (.getInt page 0)
+                         result result]  ;; thread result through
+                    (if (< position block-size)
+                      (let [rec (.getBytes page position)
+                            next-pos (+ 4 position (alength rec))]
+                        (recur next-pos (cons rec result)))
+                      result))))
+              '()
+              (range (:index block-id) -1 -1)))))
 
-            (>= position block-size)
-            (recur {:file-name file-name :index (dec index)} nil result)
-
-            :else
-            (let [rec (.getBytes page position)
-                  next-pos (+ 4 position (alength rec))]
-              (recur % next-pos (cons rec result)))))))))
 (defn flush
   ([^LogMgr log-mgr]
    (fm/write (.-file-mgr log-mgr) ((.-state log-mgr) :block-id) (.-page log-mgr))

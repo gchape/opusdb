@@ -1,5 +1,5 @@
 (ns opusdb.file
-  (:refer-clojure :exclude [* read])
+  (:refer-clojure :exclude [read])
   (:require [opusdb.page]
             [opusdb.lru :as l])
   (:import [java.io File]
@@ -8,9 +8,6 @@
            [java.nio.channels FileChannel]
            [java.nio.file StandardOpenOption]
            [java.util LinkedHashMap]))
-
-(def *
-  (fn* [x y] (unchecked-multiply-int x y)))
 
 (defn open-channel!
   [^LinkedHashMap channels db-dir file-name]
@@ -28,52 +25,52 @@
           channel))))
 
 (defn block-size
-  [fileMgr]
-  (:block-size fileMgr))
+  [file-mgr]
+  (:block-size file-mgr))
 
 (defn file-size
-  [fileMgr file-name]
-  (.length (File. (str (:db-dir fileMgr) "/" file-name))))
+  [file-mgr file-name]
+  (.length (File. (str (:db-dir file-mgr) "/" file-name))))
 
 (defn read
-  [fileMgr {:keys [file-name index] :as block-id} ^Page page]
+  [file-mgr {:keys [file-name index] :as block-id} ^Page page]
   (try
-    (let [^FileChannel channel (open-channel! (:channels fileMgr) (:db-dir fileMgr) file-name)
-          lock (nth (:strip-locks fileMgr) (mod (hash file-name) (count (:strip-locks fileMgr))))
-          offset (* index (:block-size fileMgr))
+    (let [^FileChannel channel (open-channel! (:channels file-mgr) (:db-dir file-mgr) file-name)
+          lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))
+          offset (* index (:block-size file-mgr))
           ^ByteBuffer buffer (.rewind page)]
       (locking lock
         (.position channel ^long offset)
         (.read channel buffer)))
     (catch Exception e
       (throw (ex-info "Failed to read block"
-                      {:block-id block-id :offset (* index (:block-size fileMgr))}
+                      {:block-id block-id :offset (* index (:block-size file-mgr))}
                       e)))))
 
 (defn write
-  [fileMgr {:keys [file-name index] :as block-id} ^Page page]
+  [file-mgr {:keys [file-name index] :as block-id} ^Page page]
   (try
-    (let [^FileChannel channel (open-channel! (:channels fileMgr) (:db-dir fileMgr) file-name)
-          lock (nth (:strip-locks fileMgr) (mod (hash file-name) (count (:strip-locks fileMgr))))
-          offset (* index (:block-size fileMgr))
+    (let [^FileChannel channel (open-channel! (:channels file-mgr) (:db-dir file-mgr) file-name)
+          lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))
+          offset (* index (:block-size file-mgr))
           ^ByteBuffer buffer (.rewind page)]
       (locking lock
         (.position channel ^long offset)
         (.write channel buffer)))
     (catch Exception e
       (throw (ex-info "Failed to write block"
-                      {:block-id block-id :offset (* index (:block-size fileMgr))}
+                      {:block-id block-id :offset (* index (:block-size file-mgr))}
                       e)))))
 
 (defn append
-  [fileMgr file-name]
+  [file-mgr file-name]
   (try
-    (let [^FileChannel channel (open-channel! (:channels fileMgr) (:db-dir fileMgr) file-name)
-          lock (nth (:strip-locks fileMgr) (mod (hash file-name) (count (:strip-locks fileMgr))))]
+    (let [^FileChannel channel (open-channel! (:channels file-mgr) (:db-dir file-mgr) file-name)
+          lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))]
       (locking lock
-        (let [index (quot (.size channel) (:block-size fileMgr))
-              offset (* index (:block-size fileMgr))
-              buffer (ByteBuffer/allocate (:block-size fileMgr))]
+        (let [index (quot (.size channel) (:block-size file-mgr))
+              offset (* index (:block-size file-mgr))
+              buffer (ByteBuffer/allocate (:block-size file-mgr))]
           (.position channel ^long offset)
           (.write channel buffer)
           {:file-name file-name :index index})))
