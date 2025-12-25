@@ -139,9 +139,9 @@
 
         (bm/flush-all buffer-bm 10)
 
-        (is (= -1 (b/txid buffer1)) "Buffer 1 should be flushed")
-        (is (= -1 (b/txid buffer2)) "Buffer 2 should be flushed")
-        (is (= 20 (b/txid buf3)) "Buffer 3 should not be flushed")))))
+        (is (= -1 (b/tx-id buffer1)) "Buffer 1 should be flushed")
+        (is (= -1 (b/tx-id buffer2)) "Buffer 2 should be flushed")
+        (is (= 20 (b/tx-id buf3)) "Buffer 3 should not be flushed")))))
 
 (deftest buffer-bm-flush-all-selective
   (testing "BufferBm flush-all only affects specified transaction"
@@ -158,10 +158,10 @@
 
         (bm/flush-all buffer-bm 100)
 
-        (is (= -1 (b/txid (nth buffers 0))))
-        (is (= -1 (b/txid (nth buffers 1))))
-        (is (= 200 (b/txid (nth buffers 2))))
-        (is (= 300 (b/txid (nth buffers 3))))))))
+        (is (= -1 (b/tx-id (nth buffers 0))))
+        (is (= -1 (b/tx-id (nth buffers 1))))
+        (is (= 200 (b/tx-id (nth buffers 2))))
+        (is (= 300 (b/tx-id (nth buffers 3))))))))
 
 (deftest buffer-bm-concurrent
   (testing "BufferBm concurrent access"

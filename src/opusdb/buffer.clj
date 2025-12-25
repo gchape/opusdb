@@ -8,15 +8,15 @@
            [opusdb.page Page]))
 
 (defrecord Buffer [^FileMgr file-mgr
-                   ^Page page
                    ^LogMgr log-mgr
+                   ^Page page
                    ^clojure.lang.ITransientMap state])
 
 (defn block-id [^Buffer buffer]
   (:block-id (.-state buffer)))
 
-(defn txid [^Buffer buffer]
-  (:txid (.-state buffer)))
+(defn tx-id [^Buffer buffer]
+  (:tx-id (.-state buffer)))
 
 (defn lsn [^Buffer buffer]
   (:lsn (.-state buffer)))
@@ -27,12 +27,12 @@
 (defn pin-count [^Buffer buffer]
   (:pin-count (.-state buffer)))
 
-(defn mark-dirty [^Buffer buffer new-txid new-lsn]
-  (when (neg? new-txid)
+(defn mark-dirty [^Buffer buffer new-tx-id new-lsn]
+  (when (neg? new-tx-id)
     (throw (IllegalArgumentException.
             "Transaction ID must be non-negative")))
   (let [state (.-state buffer)
-        _ (assoc! state :txid new-txid)]
+        _ (assoc! state :tx-id new-tx-id)]
     (when (and new-lsn (not (neg? new-lsn)))
       (assoc! state :lsn new-lsn))))
 
@@ -51,15 +51,15 @@
 
 (defn flush [^Buffer buffer]
   (let [state (.-state buffer)
-        txid (:txid state)]
-    (when (not= txid -1)
+        tx-id (:tx-id state)]
+    (when (not= tx-id -1)
       (let [block-id (:block-id state)]
         (when-not block-id
           (throw (IllegalStateException.
                   "Cannot flush: buffer has no assigned block")))
         (lm/flush (.-log-mgr buffer) (:lsn state))
         (f/write (.-file-mgr buffer) block-id (.-page buffer))
-        (assoc! state :txid -1)))))
+        (assoc! state :tx-id -1)))))
 
 (defn assign-to-block [^Buffer buffer block-id]
   (flush buffer)
@@ -67,7 +67,7 @@
   (conj! (.-state buffer)
          {:block-id block-id
           :pin-count 0
-          :txid -1
+          :tx-id -1
           :lsn -1}))
 
 (defn page [^Buffer buffer]
@@ -78,9 +78,9 @@
   (let [block-size (f/block-size file-mgr)
         page (p/make-page block-size)]
     (Buffer. file-mgr
-             page
              log-mgr
+             page
              (transient {:block-id nil
                          :pin-count 0
-                         :txid -1
+                         :tx-id -1
                          :lsn -1}))))

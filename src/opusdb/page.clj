@@ -21,6 +21,8 @@
             (int)))))
 
 (definterface IPage
+  (^bytes copy [])
+
   (^java.nio.ByteBuffer rewind [])
 
   (^short getShort [^int offset])
@@ -46,6 +48,12 @@
 
 (defrecord Page [^ByteBuffer bb ^Charset charset]
   IPage
+  (copy [_]
+    (let [size (.capacity bb)
+          b (byte-array size)]
+      (.get bb b)
+      b))
+
   (rewind [_]
     (do (.rewind bb) bb))
 
@@ -76,11 +84,9 @@
 
   (getBytes [_ offset]
     (let [length (.getInt bb offset)
-          b (byte-array length)
-          original-pos (.position bb)]
+          b (byte-array length)]
       (.position bb ^int (+ 4 offset))
       (.get bb b)
-      (.position bb original-pos)
       b))
 
   (setBytes [_ offset b]
@@ -91,11 +97,9 @@
 
   (getString [_ offset]
     (let [length (.getInt bb offset)
-          b (byte-array length)
-          original-pos (.position bb)]
+          b (byte-array length)]
       (.position bb ^int (+ 4 offset))
       (.get bb b)
-      (.position bb original-pos)
       (String. b charset)))
 
   (setString [_ offset s]

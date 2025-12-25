@@ -31,7 +31,7 @@
   (testing "Buffer should start with proper initial state"
     (let [{:keys [file-mgr log-mgr]} (setup)
           buffer (b/make-buffer file-mgr log-mgr)]
-      (is (= -1 (b/txid buffer)) "Initial txid should be -1")
+      (is (= -1 (b/tx-id buffer)) "Initial tx-id should be -1")
       (is (= -1 (b/lsn buffer)) "Initial lsn should be -1")
       (is (nil? (b/block-id buffer)) "Initial block should be nil")
       (is (false? (b/pinned? buffer)) "Buffer should not be pinned initially")
@@ -64,14 +64,14 @@
   (testing "Buffer mark dirty with valid transaction ID"
     (let [{:keys [file-mgr log-mgr]} (setup)
           buffer (b/make-buffer file-mgr log-mgr)]
-      (is (= -1 (b/txid buffer)))
+      (is (= -1 (b/tx-id buffer)))
 
       (b/mark-dirty buffer 42 100)
-      (is (= 42 (b/txid buffer)) "Transaction ID should be updated")
+      (is (= 42 (b/tx-id buffer)) "Transaction ID should be updated")
       (is (= 100 (b/lsn buffer)) "LSN should be updated")
 
       (b/mark-dirty buffer 10 200)
-      (is (= 10 (b/txid buffer)) "Transaction ID should be updated again")
+      (is (= 10 (b/tx-id buffer)) "Transaction ID should be updated again")
       (is (= 200 (b/lsn buffer)) "LSN should be updated again")))
 
   (testing "Buffer mark dirty with negative LSN preserves old LSN"
@@ -79,7 +79,7 @@
           buffer (b/make-buffer file-mgr log-mgr)]
       (b/mark-dirty buffer 42 100)
       (b/mark-dirty buffer 10 -1)
-      (is (= 10 (b/txid buffer)) "Transaction ID should be updated")
+      (is (= 10 (b/tx-id buffer)) "Transaction ID should be updated")
       (is (= 100 (b/lsn buffer)) "LSN should not change when negative")))
 
   (testing "Buffer mark dirty with negative transaction ID throws exception"
@@ -99,15 +99,15 @@
                             (b/flush buffer))))))
 
 (deftest buffer-flush-clean-buffer
-  (testing "Flushing clean buffer (txid=-1) does nothing"
+  (testing "Flushing clean buffer (tx-id=-1) does nothing"
     (let [{:keys [file-mgr log-mgr]} (setup)
           buffer (b/make-buffer file-mgr log-mgr)
           block-id {:file-name "f1" :index 0}]
       (ensure-block-exists file-mgr block-id)
       (b/assign-to-block buffer block-id)
-      (is (= -1 (b/txid buffer)))
+      (is (= -1 (b/tx-id buffer)))
       (b/flush buffer) ; Should not throw
-      (is (= -1 (b/txid buffer))))))
+      (is (= -1 (b/tx-id buffer))))))
 
 (deftest buffer-assign-and-flush
   (testing "Buffer assignment and flushing"
@@ -121,14 +121,14 @@
       (b/assign-to-block buffer block-id1)
       (is (= block-id1 (b/block-id buffer)) "Block should be assigned")
       (is (false? (b/pinned? buffer)) "Buffer should not be pinned after assignment")
-      (is (= -1 (b/txid buffer)) "Transaction ID should be -1 after assignment")
+      (is (= -1 (b/tx-id buffer)) "Transaction ID should be -1 after assignment")
 
       (b/mark-dirty buffer 42 100)
-      (is (= 42 (b/txid buffer)) "Buffer should be dirty")
+      (is (= 42 (b/tx-id buffer)) "Buffer should be dirty")
 
       (b/assign-to-block buffer block-id2)
       (is (= block-id2 (b/block-id buffer)) "Block should be reassigned")
-      (is (= -1 (b/txid buffer)) "Transaction ID should be reset after flush during assignment"))))
+      (is (= -1 (b/tx-id buffer)) "Transaction ID should be reset after flush during assignment"))))
 
 (deftest buffer-explicit-flush
   (testing "Explicit buffer flush resets transaction ID"
@@ -138,8 +138,8 @@
       (ensure-block-exists file-mgr block-id)
       (b/assign-to-block buffer block-id)
       (b/mark-dirty buffer 42 100)
-      (is (= 42 (b/txid buffer)))
+      (is (= 42 (b/tx-id buffer)))
 
       (b/flush buffer)
-      (is (= -1 (b/txid buffer)) "Transaction ID should be reset after flush")
+      (is (= -1 (b/tx-id buffer)) "Transaction ID should be reset after flush")
       (is (= block-id (b/block-id buffer)) "Block should remain assigned"))))
