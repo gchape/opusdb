@@ -1,4 +1,5 @@
 (ns opusdb.lru
+  (:refer-clojure :exclude [get])
   (:import [java.util LinkedHashMap]))
 
 (defn make-lru-cache

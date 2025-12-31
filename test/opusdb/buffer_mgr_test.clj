@@ -80,9 +80,9 @@
         (is (= 0 (bm/available buffer-bm))
             "No buffers available when all are pinned")
 
-        (is (= block-id1 (b/block-id buffer1)) "Buffer 1 has correct block")
-        (is (= block-id2 (b/block-id buf2)) "Buffer 2 has correct block")
-        (is (= block-id3 (b/block-id buf3)) "Buffer 3 has correct block")))))
+        (is (= block-id1 (:block-id (:state buffer1))) "Buffer 1 has correct block")
+        (is (= block-id2 (:block-id (:state buf2))) "Buffer 2 has correct block")
+        (is (= block-id3 (:block-id (:state buf3))) "Buffer 3 has correct block")))))
 
 (deftest buffer-bm-reuse
   (testing "BufferBm reuses unpinned buffers"
@@ -103,7 +103,7 @@
 
         (let [buf3 (bm/pin-buffer buffer-bm block-id3)]
           (is (= buffer1 buf3) "Unpinned buffer should be reused")
-          (is (= block-id3 (b/block-id buf3)) "Reused buffer has new block")
+          (is (= block-id3 (:block-id (:state buf3))) "Reused buffer has new block")
           (is (= 0 (bm/available buffer-bm))))))))
 
 (deftest buffer-bm-timeout
@@ -139,9 +139,9 @@
 
         (bm/flush-all buffer-bm 10)
 
-        (is (= -1 (b/tx-id buffer1)) "Buffer 1 should be flushed")
-        (is (= -1 (b/tx-id buffer2)) "Buffer 2 should be flushed")
-        (is (= 20 (b/tx-id buf3)) "Buffer 3 should not be flushed")))))
+        (is (= -1 (:tx-id (:state buffer1))) "Buffer 1 should be flushed")
+        (is (= -1 (:tx-id (:state buffer2))) "Buffer 2 should be flushed")
+        (is (= 20 (:tx-id (:state buf3))) "Buffer 3 should not be flushed")))))
 
 (deftest buffer-bm-flush-all-selective
   (testing "BufferBm flush-all only affects specified transaction"
@@ -158,10 +158,10 @@
 
         (bm/flush-all buffer-bm 100)
 
-        (is (= -1 (b/tx-id (nth buffers 0))))
-        (is (= -1 (b/tx-id (nth buffers 1))))
-        (is (= 200 (b/tx-id (nth buffers 2))))
-        (is (= 300 (b/tx-id (nth buffers 3))))))))
+        (is (= -1 (:tx-id (:state (nth buffers 0)))))
+        (is (= -1 (:tx-id (:state (nth buffers 1)))))
+        (is (= 200 (:tx-id (:state (nth buffers 2)))))
+        (is (= 300 (:tx-id (:state (nth buffers 3)))))))))
 
 (deftest buffer-bm-concurrent
   (testing "BufferBm concurrent access"
@@ -198,7 +198,7 @@
             buffer2 (bm/pin-buffer buffer-bm block-id)
             buffer3 (bm/pin-buffer buffer-bm block-id)]
         (is (= buffer1 buffer2 buffer3) "All returns should be same buffer")
-        (is (= 3 (b/pin-count buffer1)) "Pin count should be 3")
+        (is (= 3 (:pin-count (:state buffer1))) "Pin count should be 3")
         (is (= 2 (bm/available buffer-bm))
             "Only one buffer unavailable")))))
 
@@ -211,16 +211,16 @@
       (let [buffer (bm/pin-buffer buffer-bm block-id)]
         (bm/pin-buffer buffer-bm block-id)
         (bm/pin-buffer buffer-bm block-id)
-        (is (= 3 (b/pin-count buffer)))
+        (is (= 3 (:pin-count (:state buffer))))
 
         (bm/unpin-buffer buffer-bm buffer)
-        (is (= 2 (b/pin-count buffer)))
+        (is (= 2 (:pin-count (:state buffer))))
         (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
         (bm/unpin-buffer buffer-bm buffer)
-        (is (= 1 (b/pin-count buffer)))
+        (is (= 1 (:pin-count (:state buffer))))
         (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
         (bm/unpin-buffer buffer-bm buffer)
-        (is (= 0 (b/pin-count buffer)))
+        (is (= 0 (:pin-count (:state buffer))))
         (is (= 2 (bm/available buffer-bm)) "Now unpinned")))))

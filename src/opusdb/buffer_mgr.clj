@@ -8,15 +8,26 @@
 
 (defn- find-existing-buffer
   [^LinkedHashMap buffer-pool block-id]
-  (let [values (iterator-seq (.iterator (vals buffer-pool)))]
-    (first (filter #(= (b/block-id %) block-id)
-                   values))))
+  (let [it (.iterator (.values buffer-pool))]
+    (loop []
+      (if (.hasNext it)
+        (let [next (.next it)
+              state (:state next)]
+          (if (= (:block-id state) block-id)
+            next
+            (recur)))
+        nil))))
 
 (defn- choose-unpinned-buffer
   [^LinkedHashMap buffer-pool]
-  (let [values (iterator-seq (.iterator (vals buffer-pool)))]
-    (first (filter #(not (b/pinned? %))
-                   values))))
+  (let [it (.iterator (.values buffer-pool))]
+    (loop []
+      (if (.hasNext it)
+        (let [next (.next it)]
+          (if (b/unpinned? next)
+            next
+            (recur)))
+        nil))))
 
 (defrecord BufferMgr [^LinkedHashMap buffer-pool
                       ^clojure.lang.ITransientMap state
@@ -24,20 +35,22 @@
 
 (defn available [^BufferMgr buffer-mgr]
   (locking buffer-mgr
-    (:available (.-state buffer-mgr))))
+    (:available (:state buffer-mgr))))
 
 (defn flush-all [^BufferMgr buffer-mgr tx-id]
   (locking buffer-mgr
-    (let [values (iterator-seq (.iterator (.values ^LinkedHashMap (:buffer-pool buffer-mgr))))]
-      (run! #(when (= (b/tx-id %) tx-id)
-               (b/flush %))
-            values))))
+    (let [it (.iterator (.values ^LinkedHashMap (:buffer-pool buffer-mgr)))]
+      (while (.hasNext it)
+        (let [next (.next it)
+              state (:state next)]
+          (when (= (:tx-id state) tx-id)
+            (b/flush next)))))))
 
-(defn unpin-buffer [^BufferMgr buffer-mgr buffer]
+(defn unpin-buffer [^BufferMgr buffer-mgr buf]
   (locking buffer-mgr
-    (b/unpin buffer)
-    (when-not (b/pinned? buffer)
-      (let [state (.-state buffer-mgr)
+    (b/unpin buf)
+    (when-not (b/pinned? buf)
+      (let [state (:state buffer-mgr)
             available (:available state)]
         (conj! state
                {:available (unchecked-inc-int available)}))
@@ -61,7 +74,7 @@
                     (recur)))
               (do
                 (when-not (b/pinned? buffer)
-                  (let [state (.-state buffer-mgr)
+                  (let [state (:state buffer-mgr)
                         available (:available state)]
                     (conj! state
                            {:available (unchecked-dec-int available)})))

@@ -1,15 +1,23 @@
 (ns opusdb.file
   (:refer-clojure :exclude [read])
-  (:require [opusdb.page]
-            [opusdb.lru :as l])
+  (:require [opusdb.lru :as l]
+            [opusdb.page :as p])
   (:import [java.io File]
-           [opusdb.page Page]
            [java.nio ByteBuffer]
+           [io.netty.buffer ByteBuf]
            [java.nio.channels FileChannel]
            [java.nio.file StandardOpenOption]
            [java.util LinkedHashMap]))
 
-(defn open-channel!
+(defn block-size
+  [file-mgr]
+  (:block-size file-mgr))
+
+(defn file-size
+  [file-mgr file-name]
+  (.length (File. (str (:db-dir file-mgr) "/" file-name))))
+
+(defn- open-channel
   [^LinkedHashMap channels db-dir file-name]
   (locking channels
     (or (.get channels file-name)
@@ -24,55 +32,54 @@
           (.put channels file-name channel)
           channel))))
 
-(defn block-size
-  [file-mgr]
-  (:block-size file-mgr))
-
-(defn file-size
-  [file-mgr file-name]
-  (.length (File. (str (:db-dir file-mgr) "/" file-name))))
-
 (defn read
-  [file-mgr {:keys [file-name index] :as block-id} ^Page page]
+  [file-mgr {:keys [file-name index] :as block-id} ^ByteBuf page]
   (try
-    (let [^FileChannel channel (open-channel! (:channels file-mgr) (:db-dir file-mgr) file-name)
+    (let [^FileChannel channel (open-channel (:channels file-mgr) (:db-dir file-mgr) file-name)
           lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))
-          offset (* index (:block-size file-mgr))
-          ^ByteBuffer buffer (.rewind page)]
+          size (block-size file-mgr)
+          ^long offset (* index size)
+          ^ByteBuffer buf (.nioBuffer page 0 size)]
       (locking lock
-        (.position channel ^long offset)
-        (.read channel buffer)))
+        (.position channel offset)
+        (.read channel buf)
+        (.setBytes page 0 buf)))
     (catch Exception e
       (throw (ex-info "Failed to read block"
-                      {:block-id block-id :offset (* index (:block-size file-mgr))}
+                      {:block-id block-id}
                       e)))))
 
 (defn write
-  [file-mgr {:keys [file-name index] :as block-id} ^Page page]
+  [file-mgr {:keys [file-name index] :as block-id} ^ByteBuf page]
   (try
-    (let [^FileChannel channel (open-channel! (:channels file-mgr) (:db-dir file-mgr) file-name)
-          lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))
-          offset (* index (:block-size file-mgr))
-          ^ByteBuffer buffer (.rewind page)]
+    (let [^FileChannel channel (open-channel (:channels file-mgr) (:db-dir file-mgr) file-name)
+          lock (nth (:strip-locks file-mgr)
+                    (mod (hash file-name) (count (:strip-locks file-mgr))))
+          block-size (:block-size file-mgr)
+          ^long offset (* index block-size)
+          ^ByteBuffer buf (.nioBuffer page 0 block-size)]
       (locking lock
-        (.position channel ^long offset)
-        (.write channel buffer)))
+        (.position channel offset)
+        (.write channel buf)))
     (catch Exception e
       (throw (ex-info "Failed to write block"
-                      {:block-id block-id :offset (* index (:block-size file-mgr))}
+                      {:block-id block-id}
                       e)))))
 
 (defn append
   [file-mgr file-name]
   (try
-    (let [^FileChannel channel (open-channel! (:channels file-mgr) (:db-dir file-mgr) file-name)
-          lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))]
+    (let [^FileChannel channel (open-channel (:channels file-mgr) (:db-dir file-mgr) file-name)
+          lock (nth (:strip-locks file-mgr)
+                    (mod (hash file-name) (count (:strip-locks file-mgr))))]
       (locking lock
-        (let [index (quot (.size channel) (:block-size file-mgr))
-              offset (* index (:block-size file-mgr))
-              buffer (ByteBuffer/allocate (:block-size file-mgr))]
+        (let [block-size (:block-size file-mgr)
+              index (quot (.size channel) block-size)
+              offset (* index block-size)
+              ^ByteBuf page (p/make-page block-size)
+              buf (.nioBuffer page 0 block-size)]
           (.position channel ^long offset)
-          (.write channel buffer)
+          (.write channel buf)
           {:file-name file-name :index index})))
     (catch Exception e
       (throw (ex-info "Failed to append block"

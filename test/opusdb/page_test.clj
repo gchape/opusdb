@@ -1,141 +1,119 @@
 (ns opusdb.page-test
-  (:require [clojure.test :as test]
-            [opusdb.page :as page]))
+  (:require [clojure.test :refer [deftest testing is]]
+            [opusdb.page :as page])
+  (:import [io.netty.buffer ByteBuf]))
 
-(test/deftest test-make-page-with-long
-  (test/testing "Creating a page with a block size"
-    (let [page (page/make-page 1024)]
-      (test/is (not (nil? page)))
-      (test/is (instance? opusdb.page.Page page)))))
+;; ---------- make-page ---------- 
+(deftest test-make-page
+  (testing "make-page with integer capacity"
+    (let [buf (page/make-page 1024)]
+      (is (instance? ByteBuf buf))
+      (is (= 1024 (.capacity buf)))))
 
-(test/deftest test-make-page-with-byte-array
-  (test/testing "Creating a page from a byte array"
-    (let [ba (byte-array 1024)
-          page (page/make-page ba)]
-      (test/is (not (nil? page)))
-      (test/is (instance? opusdb.page.Page page)))))
+  (testing "make-page with long capacity"
+    (let [buf (page/make-page (long 2048))]
+      (is (instance? ByteBuf buf))
+      (is (= 2048 (.capacity buf)))))
 
-(test/deftest test-get-set-int
-  (test/testing "Getting and setting integers"
-    (let [page (page/make-page 1024)]
-      (.setInt page 0 42)
-      (test/is (= 42 (.getInt page 0)))
+  (testing "make-page from byte array"
+    (let [arr (byte-array 128)
+          buf (page/make-page arr)]
+      (is (instance? ByteBuf buf))
+      (is (= 128 (.capacity buf)))
+      (is (= 0 (.getByte buf 0))))))
 
-      (.setInt page 100 -999)
-      (test/is (= -999 (.getInt page 100)))
+;; ---------- bytes ---------- 
+(deftest test-set-get-bytes
+  (testing "store and retrieve bytes"
+    (let [buf (page/make-page 128)
+          data (byte-array [1 2 3 4 5])]
+      (page/set-bytes buf 0 data)
+      (is (= [1 2 3 4 5]
+             (seq (page/get-bytes buf 0))))))
 
-      (.setInt page 500 Integer/MAX_VALUE)
-      (test/is (= Integer/MAX_VALUE (.getInt page 500))))))
+  (testing "bytes at different offsets"
+    (let [buf (page/make-page 128)
+          a (byte-array [10 20])
+          b (byte-array [30 40 50])]
+      (page/set-bytes buf 0 a)
+      (page/set-bytes buf 16 b)
 
-(test/deftest test-get-set-string
-  (test/testing "Getting and setting strings"
-    (let [page (page/make-page 1024)]
-      (.setString page 0 "Hello")
-      (test/is (= "Hello" (.getString page 0)))
+      (is (= [10 20] (seq (page/get-bytes buf 0))))
+      (is (= [30 40 50] (seq (page/get-bytes buf 16)))))))
 
-      (.setString page 100 "World")
-      (test/is (= "World" (.getString page 100)))
+;; ---------- strings ---------- 
+(deftest test-set-get-string
+  (testing "store and retrieve ASCII string"
+    (let [buf (page/make-page 128)]
+      (page/set-string buf 0 "Hello")
+      (is (= "Hello" (page/get-string buf 0)))))
 
-      (.setString page 200 "")
-      (test/is (= "" (.getString page 200))))))
+  (testing "empty string"
+    (let [buf (page/make-page 64)]
+      (page/set-string buf 0 "")
+      (is (= "" (page/get-string buf 0)))))
 
-(test/deftest test-string-with-special-chars
-  (test/testing "Strings with ASCII special characters"
-    (let [page (page/make-page 1024)
-          test-str "Hello@#$%123"]
-      (.setString page 0 test-str)
-      (test/is (= test-str (.getString page 0))))))
+  (testing "string at offset"
+    (let [buf (page/make-page 128)]
+      (page/set-string buf 32 "World")
+      (is (= "World" (page/get-string buf 32))))))
 
-(test/deftest test-multiple-operations
-  (test/testing "Multiple reads and writes"
-    (let [page (page/make-page 1024)]
-      (.setInt page 0 100)
-      (.setString page 10 "First")
-      (.setInt page 50 200)
-      (.setString page 60 "Second")
+(deftest test-string-special-ascii
+  (testing "ASCII punctuation"
+    (let [buf (page/make-page 128)
+          s "Hello@#$%123"]
+      (page/set-string buf 0 s)
+      (is (= s (page/get-string buf 0))))))
 
-      (test/is (= 100 (.getInt page 0)))
-      (test/is (= "First" (.getString page 10)))
-      (test/is (= 200 (.getInt page 50)))
-      (test/is (= "Second" (.getString page 60))))))
+;; ---------- max-encoded-size ---------- 
+(deftest test-max-encoded-size
+  (testing "empty string"
+    (is (= 4 (page/max-encoded-size ""))))
 
-(test/deftest test-max-encoded-size
-  (test/testing "Maximum encoded size calculation"
-    (test/is (= 4 (page/max-encoded-size "")))
-    (test/is (= 9 (page/max-encoded-size "Hello")))
-    (test/is (= 14 (page/max-encoded-size "HelloWorld")))))
+  (testing "short string"
+    ;; 5 ASCII chars + 4-byte length prefix
+    (is (= 9 (page/max-encoded-size "Hello"))))
 
-(test/deftest test-page-independence
-  (test/testing "Multiple pages are independent"
-    (let [p1 (page/make-page 512)
-          p2 (page/make-page 512)]
-      (.setInt p1 0 100)
-      (.setInt p2 0 200)
+  (testing "longer string"
+    (is (= 14 (page/max-encoded-size "HelloWorld")))))
 
-      (test/is (= 100 (.getInt p1 0)))
-      (test/is (= 200 (.getInt p2 0))))))
+;; ---------- independence ---------- 
+(deftest test-page-independence
+  (testing "buffers do not share state"
+    (let [b1 (page/make-page 64)
+          b2 (page/make-page 64)]
+      (.setInt b1 0 100)
+      (.setInt b2 0 200)
 
-(test/deftest test-string-preserves-buffer-position
-  (test/testing "getString does not change buffer position permanently"
-    (let [page (page/make-page 1024)]
-      (.setString page 0 "Test")
-      (.getString page 0)
-      (.getString page 0)
-      (test/is (= "Test" (.getString page 0))))))
+      (is (= 100 (.getInt b1 0)))
+      (is (= 200 (.getInt b2 0))))))
 
-(test/deftest test-get-set-float
-  (test/testing "Getting and setting floats"
-    (let [page (page/make-page 1024)]
-      (.setFloat page 0 2.5)
-      (test/is (= 2.5 (.getFloat page 0)))
+;; ---------- overwrite behavior ---------- 
+(deftest test-overwrite-bytes
+  (testing "overwriting replaces previous value"
+    (let [buf (page/make-page 64)]
+      (page/set-bytes buf 0 (byte-array [1 2 3]))
+      (page/set-bytes buf 0 (byte-array [9 8]))
 
-      (.setFloat page 100 -8.0)
-      (test/is (= -8.0 (.getFloat page 100)))
+      (is (= [9 8]
+             (seq (page/get-bytes buf 0)))))))
 
-      (.setFloat page 500 Float/MAX_VALUE)
-      (test/is (= Float/MAX_VALUE (.getFloat page 500))))))
+(deftest test-overwrite-string
+  (testing "overwriting string replaces previous value"
+    (let [buf (page/make-page 64)]
+      (page/set-string buf 0 "First")
+      (page/set-string buf 0 "Second")
 
-(test/deftest test-get-set-double
-  (test/testing "Getting and setting doubles"
-    (let [page (page/make-page 1024)]
-      (.setDouble page 0 3.125)
-      (test/is (= 3.125 (.getDouble page 0)))
+      (is (= "Second" (page/get-string buf 0))))))
 
-      (.setDouble page 100 -10.25)
-      (test/is (= -10.25 (.getDouble page 100)))
+;; ---------- raw ByteBuf semantics (sanity) ---------- 
+(deftest test-raw-bytebuf-access
+  (testing "ByteBuf primitive operations still work"
+    (let [buf (page/make-page 64)]
+      (.setInt buf 0 42)
+      (.setFloat buf 4 1.5)
+      (.setDouble buf 8 3.25)
 
-      (.setDouble page 500 Double/MAX_VALUE)
-      (test/is (= Double/MAX_VALUE (.getDouble page 500))))))
-
-(test/deftest test-set-float-and-double-mixed
-  (test/testing "Setting float and double at the same offset"
-    (let [page (page/make-page 1024)]
-      (.setFloat page 0 1.5)
-      (.setDouble page 4 4.75)
-
-      (test/is (= 1.5 (.getFloat page 0)))
-      (test/is (= 4.75 (.getDouble page 4))))))
-
-(test/deftest test-get-set-float-with-special-values
-  (test/testing "Getting and setting special float values"
-    (let [page (page/make-page 1024)]
-      (.setFloat page 0 Float/NaN)
-      (test/is (Float/isNaN (.getFloat page 0)))
-
-      (.setFloat page 100 Float/POSITIVE_INFINITY)
-      (test/is (= Float/POSITIVE_INFINITY (.getFloat page 100)))
-
-      (.setFloat page 200 Float/NEGATIVE_INFINITY)
-      (test/is (= Float/NEGATIVE_INFINITY (.getFloat page 200))))))
-
-(test/deftest test-get-set-double-with-special-values
-  (test/testing "Getting and setting special double values"
-    (let [page (page/make-page 1024)]
-      (.setDouble page 0 Double/NaN)
-      (test/is (Double/isNaN (.getDouble page 0)))
-
-      (.setDouble page 100 Double/POSITIVE_INFINITY)
-      (test/is (= Double/POSITIVE_INFINITY (.getDouble page 100)))
-
-      (.setDouble page 200 Double/NEGATIVE_INFINITY)
-      (test/is (= Double/NEGATIVE_INFINITY (.getDouble page 200))))))
+      (is (= 42 (.getInt buf 0)))
+      (is (= 1.5 (.getFloat buf 4)))
+      (is (= 3.25 (.getDouble buf 8))))))

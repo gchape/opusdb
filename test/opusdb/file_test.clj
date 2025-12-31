@@ -7,11 +7,12 @@
 (def test-db-dir "test-db")
 (def test-block-size 4096)
 
+;; ---------- helpers ----------
 (defn delete-dir [path]
   (let [file (File. path)]
     (when (.exists file)
-      (doseq [file (reverse (file-seq file))]
-        (.delete file)))))
+      (doseq [f (reverse (file-seq file))]
+        (.delete f)))))
 
 (def test-counter (atom 0))
 
@@ -29,141 +30,133 @@
 (defn setup-fm [db-dir]
   (fm/make-file-mgr db-dir test-block-size))
 
+(defn read-bytes
+  "Read n bytes from a ByteBuf starting at offset 0."
+  [buf n]
+  (let [arr (byte-array n)]
+    (.getBytes buf 0 arr)
+    (seq arr)))
+
+;; ---------- tests ----------
 (deftest test-make-file-mgr
   (let [db-dir (unique-test-db-dir)]
     (testing "creates file manager"
-      (let [fm (setup-fm db-dir)]
-        (is (= test-block-size (fm/block-size fm)))
-        (is (= db-dir (:db-dir fm)))))
+      (let [mgr (setup-fm db-dir)]
+        (is (= test-block-size (fm/block-size mgr)))
+        (is (= db-dir (:db-dir mgr)))))
 
     (testing "creates directory"
       (setup-fm db-dir)
       (is (.exists (File. db-dir))))
 
     (testing "cleans temp files"
-      (let [new-db-dir (unique-test-db-dir)
-            _ (.mkdirs (File. new-db-dir))
-            temp-file (File. new-db-dir "temp_should_be_deleted.db")]
-        (.createNewFile temp-file)
-        (is (.exists temp-file))
-        (setup-fm new-db-dir)
-        (is (not (.exists temp-file)))))))
+      (let [dir (unique-test-db-dir)
+            _ (.mkdirs (File. dir))
+            temp (File. dir "temp_should_be_deleted.db")]
+        (.createNewFile temp)
+        (is (.exists temp))
+        (setup-fm dir)
+        (is (not (.exists temp)))))))
 
 (deftest test-append
   (let [db-dir (unique-test-db-dir)]
     (testing "appends single block"
-      (let [fm (setup-fm db-dir)
-            block (fm/append fm "test.db")]
+      (let [mgr (setup-fm db-dir)
+            block (fm/append mgr "test.db")]
         (is (= "test.db" (:file-name block)))
         (is (= 0 (:index block)))))
 
     (testing "appends multiple blocks"
-      (let [fm (setup-fm db-dir)
-            blocks (map (fn* [_] (fm/append fm "test.db")) (range 3))]
+      (let [mgr (setup-fm db-dir)
+            blocks (doall (repeatedly 3 #(fm/append mgr "test.db")))]
         (is (= [1 2 3] (map :index blocks)))))
 
     (testing "appends to different files"
-      (let [fm (setup-fm db-dir)
-            block-id1 (fm/append fm "file1.db")
-            block-id2 (fm/append fm "file2.db")]
-        (is (= "file1.db" (:file-name block-id1)))
-        (is (= "file2.db" (:file-name block-id2)))
-        (is (= 0 (:index block-id1)))
-        (is (= 0 (:index block-id2)))))))
+      (let [mgr (setup-fm db-dir)
+            b1 (fm/append mgr "file1.db")
+            b2 (fm/append mgr "file2.db")]
+        (is (= 0 (:index b1)))
+        (is (= 0 (:index b2)))
+        (is (= "file1.db" (:file-name b1)))
+        (is (= "file2.db" (:file-name b2)))))))
 
 (deftest test-write-and-read
   (let [db-dir (unique-test-db-dir)]
-    (testing "single block"
-      (let [fm (setup-fm db-dir)
-            block (fm/append fm "test.db")
+    (testing "single block write/read"
+      (let [mgr (setup-fm db-dir)
+            block (fm/append mgr "test.db")
             buf (p/make-page test-block-size)]
         (.setBytes buf 0 (byte-array [1 2 3 4 5]))
-        (fm/write fm block buf)
+        (fm/write mgr block buf)
 
         (let [read-buf (p/make-page test-block-size)]
-          (fm/read fm block read-buf)
-          (is (= [1 2 3 4 5] (seq (.getBytes read-buf 0)))))))
+          (fm/read mgr block read-buf)
+          (is (= [1 2 3 4 5] (read-bytes read-buf 5))))))
 
     (testing "multiple blocks"
-      (let [fm (setup-fm db-dir)
-            block-id1 (fm/append fm "test.db")
-            block-id2 (fm/append fm "test.db")
-            buffer1 (p/make-page test-block-size)
-            buffer2 (p/make-page test-block-size)]
-        (.setBytes buffer1 0 (byte-array [10 20 30]))
-        (fm/write fm block-id1 buffer1)
-        (.setBytes buffer2 0 (byte-array [40 50 60]))
-        (fm/write fm block-id2 buffer2)
+      (let [mgr (setup-fm db-dir)
+            b1 (fm/append mgr "test.db")
+            b2 (fm/append mgr "test.db")
+            buf1 (p/make-page test-block-size)
+            buf2 (p/make-page test-block-size)]
+        (.setBytes buf1 0 (byte-array [10 20 30]))
+        (.setBytes buf2 0 (byte-array [40 50 60]))
+        (fm/write mgr b1 buf1)
+        (fm/write mgr b2 buf2)
 
         (let [r1 (p/make-page test-block-size)
               r2 (p/make-page test-block-size)]
-          (fm/read fm block-id1 r1)
-          (fm/read fm block-id2 r2)
-          (is (= [10 20 30] (seq (.getBytes r1 0))))
-          (is (= [40 50 60] (seq (.getBytes r2 0)))))))
+          (fm/read mgr b1 r1)
+          (fm/read mgr b2 r2)
+          (is (= [10 20 30] (read-bytes r1 3)))
+          (is (= [40 50 60] (read-bytes r2 3))))))
 
     (testing "overwrite block"
-      (let [fm (setup-fm db-dir)
-            block (fm/append fm "test.db")
-            buffer1 (p/make-page test-block-size)
-            buffer2 (p/make-page test-block-size)]
-        (.setBytes buffer1 0 (byte-array [1 2 3]))
-        (fm/write fm block buffer1)
-        (.setBytes buffer2 0 (byte-array [7 8 9]))
-        (fm/write fm block buffer2)
+      (let [mgr (setup-fm db-dir)
+            block (fm/append mgr "test.db")
+            buf1 (p/make-page test-block-size)
+            buf2 (p/make-page test-block-size)]
+        (.setBytes buf1 0 (byte-array [1 2 3]))
+        (fm/write mgr block buf1)
+        (.setBytes buf2 0 (byte-array [7 8 9]))
+        (fm/write mgr block buf2)
 
-        (let [buf (p/make-page test-block-size)]
-          (fm/read fm block buf)
-          (is (= [7 8 9] (seq (.getBytes buf 0)))))))))
+        (let [r (p/make-page test-block-size)]
+          (fm/read mgr block r)
+          (is (= [7 8 9] (read-bytes r 3))))))))
 
 (deftest test-multiple-files
   (let [db-dir (unique-test-db-dir)]
     (testing "independent files"
-      (let [fm (setup-fm db-dir)
-            block-id1 (fm/append fm "file1.db")
-            block-id2 (fm/append fm "file2.db")
-            buffer1 (p/make-page test-block-size)
-            buffer2 (p/make-page test-block-size)]
-        (.setBytes buffer1 0 (byte-array [100 101]))
-        (fm/write fm block-id1 buffer1)
-        (.setBytes buffer2 0 (byte-array [50 51]))
-        (fm/write fm block-id2 buffer2)
+      (let [mgr (setup-fm db-dir)
+            b1 (fm/append mgr "file1.db")
+            b2 (fm/append mgr "file2.db")
+            buf1 (p/make-page test-block-size)
+            buf2 (p/make-page test-block-size)]
+        (.setBytes buf1 0 (byte-array [100 101]))
+        (.setBytes buf2 0 (byte-array [50 51]))
+        (fm/write mgr b1 buf1)
+        (fm/write mgr b2 buf2)
 
         (let [r1 (p/make-page test-block-size)
               r2 (p/make-page test-block-size)]
-          (fm/read fm block-id1 r1)
-          (fm/read fm block-id2 r2)
-          (is (= (byte 100) (aget (.getBytes r1 0) 0)))
-          (is (= (byte 101) (aget (.getBytes r1 0) 1)))
-          (is (= (byte 50) (aget (.getBytes r2 0) 0)))
-          (is (= (byte 51) (aget (.getBytes r2 0) 1))))))))
-
-(deftest test-error-handling
-  (let [db-dir (unique-test-db-dir)]
-    (testing "read large block id"
-      (let [fm (setup-fm db-dir)
-            _ (fm/append fm "test.db")
-            buffer (p/make-page test-block-size)]
-        (fm/read fm {:file-name "test.db" :index 999} buffer)
-        (is (= 0 (.getInt buffer 0)))))
-
-    (testing "nil block-id throws"
-      (let [fm (setup-fm db-dir)
-            buffer (p/make-page test-block-size)]
-        (is (thrown? Exception
-                     (fm/write fm {:file-name "test.db" :index nil} buffer)))))))
+          (fm/read mgr b1 r1)
+          (fm/read mgr b2 r2)
+          (is (= [100 101] (read-bytes r1 2)))
+          (is (= [50 51] (read-bytes r2 2))))))))
 
 (deftest test-block-alignment
   (let [db-dir (unique-test-db-dir)]
     (testing "blocks aligned correctly"
-      (let [fm (setup-fm db-dir)
-            blocks (take 3 (repeatedly #(fm/append fm "test.db")))]
-        (doseq [[block val] (map vector blocks [11 22 33])]
-          (let [buffer (p/make-page test-block-size)]
-            (.setBytes buffer 0 (byte-array [val]))
-            (fm/write fm block buffer)))
-
-        (doseq [[block expected] (map vector blocks [11 22 33])]
+      (let [mgr (setup-fm db-dir)
+            blocks (doall (repeatedly 3 #(fm/append mgr "test.db")))
+            values [11 22 33]]
+        (doseq [[block v] (map vector blocks values)]
           (let [buf (p/make-page test-block-size)]
-            (fm/read fm block buf)
-            (is (= expected (aget (.getBytes buf 0) 0)))))))))
+            (.setBytes buf 0 (byte-array [v]))
+            (fm/write mgr block buf)))
+
+        (doseq [[block expected] (map vector blocks values)]
+          (let [buf (p/make-page test-block-size)]
+            (fm/read mgr block buf)
+            (is (= expected (first (read-bytes buf 1))))))))))

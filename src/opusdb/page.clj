@@ -1,16 +1,8 @@
 (ns opusdb.page
-  (:refer-clojure :exclude [+ *])
-  (:import [java.nio ByteBuffer]
-           [java.nio.charset Charset]))
+  (:import [io.netty.buffer ByteBuf Unpooled PooledByteBufAllocator]
+           [java.nio.charset Charset StandardCharsets]))
 
-(def +
-  (fn* [x y] (unchecked-add-int x y)))
-
-(def *
-  (fn [x y] (unchecked-multiply-int x y)))
-
-(def ^Charset charset
-  (Charset/forName "US-ASCII"))
+(def ^Charset charset StandardCharsets/US_ASCII)
 
 (defn max-encoded-size
   [^String s]
@@ -20,109 +12,43 @@
             (.maxBytesPerChar)
             (int)))))
 
-(definterface IPage
-  (^bytes copy [])
+(defn get-bytes
+  [^ByteBuf buf offset]
+  (let [length (.getInt buf offset)
+        bytearr (byte-array length)]
+    (.getBytes buf (unchecked-add-int 4 offset) bytearr)
+    bytearr))
 
-  (^java.nio.ByteBuffer rewind [])
+(defn set-bytes
+  [^ByteBuf buf offset ^bytes b]
+  (let [length (alength b)]
+    (.setInt buf offset length)
+    (.setBytes buf (unchecked-add-int 4 offset) b)))
 
-  (^short getShort [^int offset])
-  (^void setShort [^int offset ^short n])
+(defn get-string
+  [^ByteBuf buf offset]
+  (let [length (.getInt buf offset)
+        bytearr (byte-array length)]
+    (.getBytes buf (unchecked-add-int 4 offset) bytearr)
+    (String. bytearr charset)))
 
-  (^int getInt [^int offset])
-  (^void setInt [^int offset ^int n])
+(defn set-string
+  [^ByteBuf buf offset ^String s]
+  (let [bytearr (.getBytes s charset)
+        length (alength bytearr)]
+    (.setInt buf offset length)
+    (.setBytes buf (unchecked-add-int 4 offset) bytearr)))
 
-  (^long getLong [^int offset])
-  (^void setLong [^int offset ^long l])
-
-  (^float getFloat [^int offset])
-  (^void setFloat [^int offset ^float f])
-
-  (^double getDouble [^int offset])
-  (^void setDouble [^int offset ^double d])
-
-  (^bytes getBytes [^int offset])
-  (^void setBytes [^int offset ^bytes b])
-
-  (^String getString [^int offset])
-  (^void setString [^int offset ^String s]))
-
-(defrecord Page [^ByteBuffer bb ^Charset charset]
-  IPage
-  (copy [_]
-    (let [size (.capacity bb)
-          b (byte-array size)]
-      (.get bb b)
-      b))
-
-  (rewind [_]
-    (do (.rewind bb) bb))
-
-  (getShort [_ offset]
-    (.getShort bb offset))
-  (setShort [_ offset n]
-    (.putShort bb offset n))
-
-  (getInt [_ offset]
-    (.getInt bb offset))
-  (setInt [_ offset n]
-    (.putInt bb offset n))
-
-  (getLong [_ offset]
-    (.getLong bb offset))
-  (setLong [_ offset l]
-    (.putLong bb offset l))
-
-  (getFloat [_ offset]
-    (.getFloat bb offset))
-  (setFloat [_ offset f]
-    (.putFloat bb offset f))
-
-  (getDouble [_ offset]
-    (.getDouble bb offset))
-  (setDouble [_ offset d]
-    (.putDouble bb offset d))
-
-  (getBytes [_ offset]
-    (let [length (.getInt bb offset)
-          b (byte-array length)]
-      (.position bb ^int (+ 4 offset))
-      (.get bb b)
-      b))
-
-  (setBytes [_ offset b]
-    (let [length (alength b)]
-      (.position bb offset)
-      (.putInt bb length)
-      (.put bb b)))
-
-  (getString [_ offset]
-    (let [length (.getInt bb offset)
-          b (byte-array length)]
-      (.position bb ^int (+ 4 offset))
-      (.get bb b)
-      (String. b charset)))
-
-  (setString [_ offset s]
-    (let [b (.getBytes s charset)
-          length (alength b)]
-      (.position bb offset)
-      (.putInt bb length)
-      (.put bb b))))
-
-(defmulti make-page
-  class)
-
-(defmethod make-page Long
-  [block-size]
-  (Page. (ByteBuffer/allocate block-size)
-         charset))
+(defmulti make-page class)
 
 (defmethod make-page Integer
-  [block-size]
-  (Page. (ByteBuffer/allocate block-size)
-         charset))
+  [capacity]
+  (.heapBuffer PooledByteBufAllocator/DEFAULT capacity))
+
+(defmethod make-page Long
+  [capacity]
+  (.heapBuffer PooledByteBufAllocator/DEFAULT capacity))
 
 (defmethod make-page (class (byte-array 0))
-  [byte-arr]
-  (Page. (ByteBuffer/wrap byte-arr)
-         charset))
+  [^bytes bytearr]
+  (Unpooled/wrappedBuffer bytearr))
