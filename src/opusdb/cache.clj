@@ -44,15 +44,15 @@
   (cond
     (nil? tree) nil
     (= k (:key tree)) tree
-    (< k (:key tree))
+    (neg? (compare k (:key tree)))
     (let [l (:left tree)]
       (cond
         (nil? l) tree
-        (< k (:key l))
+        (neg? (compare k (:key l)))
         (rotate-right
          (rotate-right
           (assoc tree :left (splay (:left l) k))))
-        (> k (:key l))
+        (pos? (compare k (:key l)))
         (rotate-right
          (rotate-left
           (assoc tree :left (splay (:right l) k))))
@@ -62,16 +62,28 @@
     (let [r (:right tree)]
       (cond
         (nil? r) tree
-        (> k (:key r))
+        (pos? (compare k (:key r)))
         (rotate-left
          (rotate-left
           (assoc tree :right (splay (:right r) k))))
-        (< k (:key r))
+        (neg? (compare k (:key r)))
         (rotate-left
          (rotate-right
           (assoc tree :right (splay (:left r) k))))
         :else
         (rotate-left tree)))))
+
+(defn get [cid k]
+  (let [tree (splay (@cache-map cid) k)]
+    (when tree
+      (swap! cache-map assoc cid tree)
+      (letfn [(get_ [tree k]
+                (cond
+                  (nil? tree) nil
+                  (neg? (compare k (:key tree))) (get_ (:left tree) k)
+                  (pos? (compare k (:key tree))) (get_ (:right tree) k)
+                  :else (:value tree)))]
+        (get_ tree k)))))
 
 (defn- remove [tree type]
   (condp = type
@@ -98,9 +110,9 @@
   (cond
     (nil? tree)
     (make-node k v)
-    (< k (:key tree))
+    (neg? (compare k (:key tree)))
     (assoc tree :left (put- (:left tree) k v))
-    (> k (:key tree))
+    (pos? (compare k (:key tree)))
     (assoc tree :right (put- (:right tree) k v))
     :else
     (assoc tree :value v)))
@@ -117,18 +129,6 @@
           (eviction-fn (:key evicted-node) (:value evicted-node)))
         (swap! cache-map assoc cid (splay (put- new-tree k v) k)))
       (swap! cache-map assoc cid (splay (put- tree k v) k)))))
-
-(defn get [cid k]
-  (let [tree (splay (@cache-map cid) k)]
-    (when tree
-      (swap! cache-map assoc cid tree)
-      (letfn [(get_ [tree k]
-                (cond
-                  (nil? tree) nil
-                  (< k (:key tree)) (get_ (:left tree) k)
-                  (> k (:key tree)) (get_ (:right tree) k)
-                  :else (:value tree)))]
-        (get_ tree k)))))
 
 (defn change-type
   [cid new-type]

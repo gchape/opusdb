@@ -1,94 +1,69 @@
 (ns opusdb.buffer-mgr
-  (:require [opusdb.buffer :as b]
-            [opusdb.lru :as l])
+  (:require [opusdb.buffer :as b])
   (:import [opusdb.buffer Buffer]
            [opusdb.file FileMgr]
-           [opusdb.log LogMgr]
-           [java.util LinkedHashMap]))
+           [opusdb.log LogMgr]))
 
-(defn- find-existing-buffer
-  [^LinkedHashMap buffer-pool block-id]
-  (let [it (.iterator (.values buffer-pool))]
+(defrecord BufferMgr
+           [block-table
+            unpinned
+            state
+            timeout])
+
+(defn- find-buffer [^BufferMgr bm block-id]
+  (get @(:block-table bm) block-id))
+
+(defn- evict-buffer [^BufferMgr bm]
+  (let [buf (first @(:unpinned bm))]
+    (when buf
+      (swap! (:unpinned bm) disj buf)
+      buf)))
+
+(defn available [^BufferMgr bm]
+  (:available @(:state bm)))
+
+(defn flush-all [^BufferMgr bm tx-id]
+  (doseq [^Buffer buf (vals @(:block-table bm))]
+    (when (= tx-id (:tx-id (.-state buf)))
+      (b/flush buf))))
+
+(defn unpin-buffer [^BufferMgr bm ^Buffer buf]
+  (b/unpin buf)
+  (when (b/unpinned? buf)
+    (swap! (:unpinned bm) conj buf)
+    (swap! (:state bm) update :available inc)))
+
+(defn pin-buffer [^BufferMgr bm block-id]
+  (let [start (System/currentTimeMillis)]
     (loop []
-      (if (.hasNext it)
-        (let [next (.next it)
-              state (:state next)]
-          (if (= (:block-id state) block-id)
-            next
-            (recur)))
-        nil))))
+      (cond
+        (find-buffer bm block-id)
+        (let [buf (find-buffer bm block-id)]
+          (when (b/unpinned? buf)
+            (swap! (:unpinned bm) disj buf)
+            (swap! (:state bm) update :available dec))
+          (b/pin buf)
+          buf)
 
-(defn- choose-unpinned-buffer
-  [^LinkedHashMap buffer-pool]
-  (let [it (.iterator (.values buffer-pool))]
-    (loop []
-      (if (.hasNext it)
-        (let [next (.next it)]
-          (if (b/unpinned? next)
-            next
-            (recur)))
-        nil))))
+        :else
+        (if-let [^Buffer victim (evict-buffer bm)]
+          (let [old-block (:block-id (.-state victim))]
+            (when old-block (swap! (:block-table bm) dissoc old-block))
+            (b/assign-to-block victim block-id)
+            (swap! (:block-table bm) assoc block-id victim)
+            (b/pin victim)
+            (swap! (:state bm) update :available dec)
+            victim)
 
-(defrecord BufferMgr [^LinkedHashMap buffer-pool
-                      ^clojure.lang.ITransientMap state
-                      ^long timeout])
+          (if (> (- (System/currentTimeMillis) start) (:timeout bm))
+            (throw (ex-info "Buffer abort: waiting too long" {:block-id block-id}))
+            (do
+              (Thread/sleep ^int (:timeout bm))
+              (recur))))))))
 
-(defn available [^BufferMgr buffer-mgr]
-  (locking buffer-mgr
-    (:available (:state buffer-mgr))))
-
-(defn flush-all [^BufferMgr buffer-mgr tx-id]
-  (locking buffer-mgr
-    (let [it (.iterator (.values ^LinkedHashMap (:buffer-pool buffer-mgr)))]
-      (while (.hasNext it)
-        (let [next (.next it)
-              state (:state next)]
-          (when (= (:tx-id state) tx-id)
-            (b/flush next)))))))
-
-(defn unpin-buffer [^BufferMgr buffer-mgr buf]
-  (locking buffer-mgr
-    (b/unpin buf)
-    (when-not (b/pinned? buf)
-      (let [state (:state buffer-mgr)
-            available (:available state)]
-        (conj! state
-               {:available (unchecked-inc-int available)}))
-      (.notifyAll buffer-mgr))))
-
-(defn pin-buffer [^BufferMgr buffer-mgr block-id]
-  (locking buffer-mgr
-    (try
-      (let [^LinkedHashMap buffer-pool (:buffer-pool buffer-mgr)
-            start-time (System/currentTimeMillis)
-            timeout (:timeout buffer-mgr)]
-        (loop []
-          (let [^Buffer buffer (or (find-existing-buffer buffer-pool block-id)
-                                   (when-let [^Buffer unpinned (choose-unpinned-buffer buffer-pool)]
-                                     (b/assign-to-block unpinned block-id)
-                                     unpinned))]
-            (if (nil? buffer)
-              (if (> (- (System/currentTimeMillis) start-time) timeout)
-                (throw (ex-info "Buffer abort: waiting too long" {:block-id block-id}))
-                (do (.wait buffer-mgr timeout)
-                    (recur)))
-              (do
-                (when-not (b/pinned? buffer)
-                  (let [state (:state buffer-mgr)
-                        available (:available state)]
-                    (conj! state
-                           {:available (unchecked-dec-int available)})))
-                (b/pin buffer)
-                (.get buffer-pool buffer)
-                buffer)))))
-      (catch InterruptedException _
-        (throw (ex-info "Buffer abort: interrupted" {:block-id block-id}))))))
-
-(defn make-buffer-mgr
-  [^FileMgr file-mgr ^LogMgr log-mgr buffer-pool-size]
-  (let [^LinkedHashMap lru-cache (l/make-lru-cache buffer-pool-size nil)
-        buffer-pool (repeatedly buffer-pool-size #(b/make-buffer file-mgr log-mgr))
-        state (transient {:available buffer-pool-size})]
-    (doseq [buffer buffer-pool]
-      (.put lru-cache buffer buffer))
-    (->BufferMgr lru-cache state 10000)))
+(defn make-buffer-mgr [^FileMgr file-mgr ^LogMgr log-mgr pool-size]
+  (let [buffers   (repeatedly pool-size #(b/make-buffer file-mgr log-mgr))
+        table     (atom {})
+        unpinned  (atom (set buffers))
+        state     (atom {:available pool-size})]
+    (->BufferMgr table unpinned state 10000)))

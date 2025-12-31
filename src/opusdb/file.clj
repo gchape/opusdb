@@ -1,6 +1,6 @@
 (ns opusdb.file
   (:refer-clojure :exclude [read])
-  (:require [opusdb.lru :as l]
+  (:require [opusdb.cache :as c]
             [opusdb.page :as p])
   (:import [java.io File]
            [java.nio ByteBuffer]
@@ -18,9 +18,9 @@
   (.length (File. (str (:db-dir file-mgr) "/" file-name))))
 
 (defn- open-channel
-  [^LinkedHashMap channels db-dir file-name]
-  (locking channels
-    (or (.get channels file-name)
+  [cache-id db-dir file-name]
+  (locking cache-id
+    (or (c/get cache-id file-name)
         (let [path (.toPath (File. (str db-dir "/" file-name)))
               channel (FileChannel/open
                        path
@@ -29,13 +29,13 @@
                                     StandardOpenOption/WRITE
                                     StandardOpenOption/DSYNC
                                     StandardOpenOption/CREATE]))]
-          (.put channels file-name channel)
+          (c/put cache-id file-name channel)
           channel))))
 
 (defn read
   [file-mgr {:keys [file-name index] :as block-id} ^ByteBuf page]
   (try
-    (let [^FileChannel channel (open-channel (:channels file-mgr) (:db-dir file-mgr) file-name)
+    (let [^FileChannel channel (open-channel (:cache-id file-mgr) (:db-dir file-mgr) file-name)
           lock (nth (:strip-locks file-mgr) (mod (hash file-name) (count (:strip-locks file-mgr))))
           size (block-size file-mgr)
           ^long offset (* index size)
@@ -52,7 +52,7 @@
 (defn write
   [file-mgr {:keys [file-name index] :as block-id} ^ByteBuf page]
   (try
-    (let [^FileChannel channel (open-channel (:channels file-mgr) (:db-dir file-mgr) file-name)
+    (let [^FileChannel channel (open-channel (:cache-id file-mgr) (:db-dir file-mgr) file-name)
           lock (nth (:strip-locks file-mgr)
                     (mod (hash file-name) (count (:strip-locks file-mgr))))
           block-size (:block-size file-mgr)
@@ -69,7 +69,7 @@
 (defn append
   [file-mgr file-name]
   (try
-    (let [^FileChannel channel (open-channel (:channels file-mgr) (:db-dir file-mgr) file-name)
+    (let [^FileChannel channel (open-channel (:cache-id file-mgr) (:db-dir file-mgr) file-name)
           lock (nth (:strip-locks file-mgr)
                     (mod (hash file-name) (count (:strip-locks file-mgr))))]
       (locking lock
@@ -90,7 +90,7 @@
   (.close ^FileChannel value)
   true)
 
-(defrecord FileMgr [^LinkedHashMap channels
+(defrecord FileMgr [^int cache-id
                     ^String db-dir
                     ^int block-size
                     ^LinkedHashMap strip-locks])
@@ -108,7 +108,7 @@
          (.delete (File. (str db-dir "/" temp)))
          (catch Exception _
            (println "Warning: Failed to delete temp file" temp))))
-     (->FileMgr (l/make-lru-cache max-open-channels eviction-fn)
+     (->FileMgr (c/make-cache max-open-channels eviction-fn)
                 db-dir
                 block-size
                 (vec (repeatedly 16 #(Object.)))))))
