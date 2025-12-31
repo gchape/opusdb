@@ -132,7 +132,7 @@
 
 (defn change-type
   [cid new-type]
-  (swap! cache-opts-map cid assoc :type new-type))
+  (swap! cache-opts-map assoc-in [cid :type] new-type))
 
 (defn make-cache
   ([size eviction-fn]
