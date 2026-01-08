@@ -1,13 +1,14 @@
-(ns opusdb.log-test
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [opusdb.log :as lm]
-            [opusdb.file :refer [make-file-mgr]])
-  (:import [opusdb.log LogMgr]))
+(ns opusdb.log-mgr-test
+  (:require
+   [clojure.test :refer [deftest is testing use-fixtures]]
+   [opusdb.file-mgr :refer [make-file-mgr]]
+   [opusdb.log-mgr :as lm])
+  (:import
+   [opusdb.log_mgr LogMgr]))
 
 (def test-dir "test-log-data")
 (def block-size 400)
 
-;; ---------- Helper functions ---------- 
 (defn- unique-log-file []
   (str "test-" (System/nanoTime) ".log"))
 
@@ -49,7 +50,6 @@
   [log-mgr]
   (mapv bytes->str (seq log-mgr)))
 
-;; ---------- Basic functionality tests ----------
 (deftest test-create-log-manager
   (testing "Creating a new log manager"
     (let [[log-mgr] (make-test-log-mgr)]
@@ -67,7 +67,6 @@
       (lm/flush log-mgr)
       (is (empty? (seq log-mgr))))))
 
-;; ---------- Single record tests ----------
 (deftest test-append-single-record
   (testing "Appending and retrieving a single record"
     (let [[log-mgr] (make-test-log-mgr)
@@ -84,7 +83,6 @@
       (lm/flush log-mgr)
       (is (= ["Not flushed"] (read-records log-mgr))))))
 
-;; ---------- Multiple records tests ---------- 
 (deftest test-append-multiple-records
   (testing "Appending multiple records maintains order"
     (let [[log-mgr] (make-test-log-mgr)
@@ -102,7 +100,6 @@
       (lm/flush log-mgr)
       (is (= records (read-records log-mgr))))))
 
-;; ---------- LSN tests ---------- 
 (deftest test-lsn-increments
   (testing "LSN increments correctly for each append"
     (let [[log-mgr] (make-test-log-mgr)
@@ -113,7 +110,6 @@
       (is (= 2 lsn2))
       (is (= 3 lsn3)))))
 
-;; ---------- Flush tests ---------- 
 (deftest test-flush-by-lsn
   (testing "Conditional flushing based on LSN threshold"
     (let [[log-mgr] (make-test-log-mgr)
@@ -134,7 +130,6 @@
       (lm/flush log-mgr)
       (is (= ["First" "Second" "Third"] (read-records log-mgr))))))
 
-;; ---------- Block boundary tests ---------- 
 (deftest test-large-record
   (testing "Appending a record near block size boundary"
     (let [[log-mgr] (make-test-log-mgr)
@@ -155,22 +150,18 @@
         (is (= record-count (count records)))
         (is (every? #(= large-record %) records))))))
 
-;; ---------- Persistence tests ---------- 
 (deftest test-persistence
   (testing "Log persists across log manager instances"
     (let [log-file (unique-log-file)
           file-mgr (make-file-mgr test-dir block-size)
           records ["First" "Second" "Third"]]
-      ;; Write with first instance
       (let [log-mgr1 (lm/make-log-mgr file-mgr log-file)]
         (append-records log-mgr1 records)
         (lm/flush log-mgr1))
-      ;; Read with second instance
       (let [file-mgr2 (make-file-mgr test-dir block-size)
             log-mgr2 (lm/make-log-mgr file-mgr2 log-file)]
         (is (= records (read-records log-mgr2)))))))
 
-;; ---------- Binary data tests ---------- 
 (deftest test-binary-data
   (testing "Appending and retrieving binary data"
     (let [[log-mgr] (make-test-log-mgr)
@@ -179,7 +170,6 @@
       (lm/flush log-mgr)
       (is (= (seq binary-data) (seq (first (seq log-mgr))))))))
 
-;; ---------- Concurrency tests ---------- 
 (deftest test-concurrent-appends
   (testing "Thread-safe appending from multiple threads"
     (let [[log-mgr] (make-test-log-mgr)

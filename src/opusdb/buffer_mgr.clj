@@ -1,69 +1,95 @@
 (ns opusdb.buffer-mgr
-  (:require [opusdb.buffer :as b])
-  (:import [opusdb.buffer Buffer]
-           [opusdb.file FileMgr]
-           [opusdb.log LogMgr]))
+  (:refer-clojure :exclude [vals flush])
+  (:require
+   [opusdb.buffer :as buff]
+   [opusdb.cache.splay :as cache])
+  (:import
+   [opusdb.buffer Buffer]
+   [opusdb.cache.splay Cache]
+   [opusdb.file_mgr FileMgr]
+   [opusdb.log_mgr LogMgr]))
 
-(defrecord BufferMgr
-           [block-table
-            unpinned
-            state
-            timeout])
+(defn- vals
+  [^Cache buffer-pool]
+  (cache/vals buffer-pool))
 
-(defn- find-buffer [^BufferMgr bm block-id]
-  (get @(:block-table bm) block-id))
+(defn- as-key
+  [block-id]
+  (when block-id
+    [(:file-name block-id) (:index block-id)]))
 
-(defn- evict-buffer [^BufferMgr bm]
-  (let [buf (first @(:unpinned bm))]
-    (when buf
-      (swap! (:unpinned bm) disj buf)
-      buf)))
+(defn- find-existing-buffer
+  [^Cache buffer-pool block-id]
+  (let [key (as-key block-id)]
+    (cache/get buffer-pool key)))
 
-(defn available [^BufferMgr bm]
-  (:available @(:state bm)))
+(defn- find-unpinned-buffer
+  [^Cache buffer-pool]
+  (some #(when (buff/unpinned? %) %)
+        (vals buffer-pool)))
 
-(defn flush-all [^BufferMgr bm tx-id]
-  (doseq [^Buffer buf (vals @(:block-table bm))]
-    (when (= tx-id (:tx-id (.-state buf)))
-      (b/flush buf))))
+(defrecord BufferMgr [^Cache buffer-pool
+                      ^FileMgr file-mgr
+                      ^LogMgr log-mgr
+                      ^clojure.lang.Atom state
+                      ^long timeout])
 
-(defn unpin-buffer [^BufferMgr bm ^Buffer buf]
-  (b/unpin buf)
-  (when (b/unpinned? buf)
-    (swap! (:unpinned bm) conj buf)
-    (swap! (:state bm) update :available inc)))
+(defn available [^BufferMgr buffer-mgr]
+  (locking buffer-mgr
+    (:available @(:state buffer-mgr))))
 
-(defn pin-buffer [^BufferMgr bm block-id]
-  (let [start (System/currentTimeMillis)]
-    (loop []
-      (cond
-        (find-buffer bm block-id)
-        (let [buf (find-buffer bm block-id)]
-          (when (b/unpinned? buf)
-            (swap! (:unpinned bm) disj buf)
-            (swap! (:state bm) update :available dec))
-          (b/pin buf)
-          buf)
+(defn flush [^BufferMgr buffer-mgr tx-id]
+  (locking buffer-mgr
+    (run! #(when (= (:tx-id @(:state %)) tx-id)
+             (buff/flush %))
+          (vals (:buffer-pool buffer-mgr)))))
 
-        :else
-        (if-let [^Buffer victim (evict-buffer bm)]
-          (let [old-block (:block-id (.-state victim))]
-            (when old-block (swap! (:block-table bm) dissoc old-block))
-            (b/assign-to-block victim block-id)
-            (swap! (:block-table bm) assoc block-id victim)
-            (b/pin victim)
-            (swap! (:state bm) update :available dec)
-            victim)
+(defn unpin-buffer [^BufferMgr buffer-mgr buffer]
+  (locking buffer-mgr
+    (buff/unpin buffer)
+    (when-not (buff/pinned? buffer)
+      (swap! (:state buffer-mgr) update :available inc)
+      (.notifyAll buffer-mgr))))
 
-          (if (> (- (System/currentTimeMillis) start) (:timeout bm))
-            (throw (ex-info "Buffer abort: waiting too long" {:block-id block-id}))
+(defn pin-buffer [^BufferMgr buffer-mgr block-id]
+  (locking buffer-mgr
+    (let [^Cache pool (:buffer-pool buffer-mgr)
+          state (:state buffer-mgr)
+          key (as-key block-id)
+          start-time (System/currentTimeMillis)
+          timeout (:timeout buffer-mgr)]
+      (try
+        (loop []
+          (if-let [^Buffer buff
+                   (or (find-existing-buffer pool block-id)
+                       (when-let [^Buffer free (find-unpinned-buffer pool)]
+                         (buff/assign-to-block free block-id)
+                         (cache/put pool key free)
+                         free)
+                       ;; Lazy creation
+                       (when (< @(:count pool) (:size pool))
+                         (let [new-buff (buff/make-buffer (:file-mgr buffer-mgr)
+                                                          (:log-mgr buffer-mgr))]
+                           (buff/assign-to-block new-buff block-id)
+                           (cache/put pool key new-buff)
+                           new-buff)))]
             (do
-              (Thread/sleep ^int (:timeout bm))
-              (recur))))))))
+              (when-not (buff/pinned? buff)
+                (swap! state update :available dec))
+              (buff/pin buff)
+              buff)
+            (if (> (- (System/currentTimeMillis) start-time) timeout)
+              (throw (ex-info "Buffer abort: waiting too long"
+                              {:block-id block-id}))
+              (do
+                (.wait buffer-mgr timeout)
+                (recur)))))
+        (catch InterruptedException _
+          (throw (ex-info "Buffer abort: interrupted"
+                          {:block-id block-id})))))))
 
-(defn make-buffer-mgr [^FileMgr file-mgr ^LogMgr log-mgr pool-size]
-  (let [buffers   (repeatedly pool-size #(b/make-buffer file-mgr log-mgr))
-        table     (atom {})
-        unpinned  (atom (set buffers))
-        state     (atom {:available pool-size})]
-    (->BufferMgr table unpinned state 10000)))
+(defn make-buffer-mgr
+  [^FileMgr file-mgr ^LogMgr log-mgr buffer-pool-size]
+  (let [cache (cache/make-cache buffer-pool-size nil "LRU")
+        state (atom {:available buffer-pool-size})]
+    (->BufferMgr cache file-mgr log-mgr state 10000)))

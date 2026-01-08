@@ -1,10 +1,12 @@
 (ns opusdb.buffer-mgr-test
-  (:require [clojure.test :refer [deftest is use-fixtures testing]]
-            [opusdb.buffer :as b]
-            [opusdb.buffer-mgr :as bm]
-            [opusdb.file :as fm]
-            [opusdb.log :as lm])
-  (:import [java.io File]))
+  (:require
+   [clojure.test :refer [deftest is testing use-fixtures]]
+   [opusdb.buffer :as b]
+   [opusdb.buffer-mgr :as bm]
+   [opusdb.file-mgr :as fm]
+   [opusdb.log-mgr :as lm])
+  (:import
+   [java.io File]))
 
 (defn setup [pool-size]
   (let [file-bm (fm/make-file-mgr "test-db" 400)
@@ -80,9 +82,9 @@
         (is (= 0 (bm/available buffer-bm))
             "No buffers available when all are pinned")
 
-        (is (= block-id1 (:block-id (:state buffer1))) "Buffer 1 has correct block")
-        (is (= block-id2 (:block-id (:state buf2))) "Buffer 2 has correct block")
-        (is (= block-id3 (:block-id (:state buf3))) "Buffer 3 has correct block")))))
+        (is (= block-id1 (:block-id @(:state buffer1))) "Buffer 1 has correct block")
+        (is (= block-id2 (:block-id @(:state buf2))) "Buffer 2 has correct block")
+        (is (= block-id3 (:block-id @(:state buf3))) "Buffer 3 has correct block")))))
 
 (deftest buffer-bm-reuse
   (testing "BufferBm reuses unpinned buffers"
@@ -103,7 +105,7 @@
 
         (let [buf3 (bm/pin-buffer buffer-bm block-id3)]
           (is (= buffer1 buf3) "Unpinned buffer should be reused")
-          (is (= block-id3 (:block-id (:state buf3))) "Reused buffer has new block")
+          (is (= block-id3 (:block-id @(:state buf3))) "Reused buffer has new block")
           (is (= 0 (bm/available buffer-bm))))))))
 
 (deftest buffer-bm-timeout
@@ -120,8 +122,8 @@
                             (bm/pin-buffer buffer-bm block-id2))
           "Should timeout when no buffers available"))))
 
-(deftest buffer-bm-flush-all
-  (testing "BufferBm flush-all for specific transaction"
+(deftest buffer-bm-flush
+  (testing "BufferBm flush for specific transaction"
     (let [{:keys [file-bm buffer-bm]} (setup 3)
           block-id1 {:file-name "f1" :index 0}
           block-id2 {:file-name "f1" :index 1}
@@ -133,35 +135,35 @@
       (let [buffer1 (bm/pin-buffer buffer-bm block-id1)
             buffer2 (bm/pin-buffer buffer-bm block-id2)
             buf3 (bm/pin-buffer buffer-bm block-id3)]
-        (b/mark-dirty buffer1 10 100)
-        (b/mark-dirty buffer2 10 101)
-        (b/mark-dirty buf3 20 102)
+        (b/smear buffer1 10 100)
+        (b/smear buffer2 10 101)
+        (b/smear buf3 20 102)
 
-        (bm/flush-all buffer-bm 10)
+        (bm/flush buffer-bm 10)
 
-        (is (= -1 (:tx-id (:state buffer1))) "Buffer 1 should be flushed")
-        (is (= -1 (:tx-id (:state buffer2))) "Buffer 2 should be flushed")
-        (is (= 20 (:tx-id (:state buf3))) "Buffer 3 should not be flushed")))))
+        (is (= -1 (:tx-id @(:state buffer1))) "Buffer 1 should be flushed")
+        (is (= -1 (:tx-id @(:state buffer2))) "Buffer 2 should be flushed")
+        (is (= 20 (:tx-id @(:state buf3))) "Buffer 3 should not be flushed")))))
 
-(deftest buffer-bm-flush-all-selective
-  (testing "BufferBm flush-all only affects specified transaction"
+(deftest buffer-bm-flush-selective
+  (testing "BufferBm flush only affects specified transaction"
     (let [{:keys [file-bm buffer-bm]} (setup 4)
           blocks (map #(hash-map :file-name "f1" :index %) (range 4))]
       (doseq [block-id blocks]
         (ensure-block-exists file-bm block-id))
 
       (let [buffers (mapv #(bm/pin-buffer buffer-bm %) blocks)]
-        (b/mark-dirty (nth buffers 0) 100 1000)
-        (b/mark-dirty (nth buffers 1) 100 1001)
-        (b/mark-dirty (nth buffers 2) 200 1002)
-        (b/mark-dirty (nth buffers 3) 300 1003)
+        (b/smear (nth buffers 0) 100 1000)
+        (b/smear (nth buffers 1) 100 1001)
+        (b/smear (nth buffers 2) 200 1002)
+        (b/smear (nth buffers 3) 300 1003)
 
-        (bm/flush-all buffer-bm 100)
+        (bm/flush buffer-bm 100)
 
-        (is (= -1 (:tx-id (:state (nth buffers 0)))))
-        (is (= -1 (:tx-id (:state (nth buffers 1)))))
-        (is (= 200 (:tx-id (:state (nth buffers 2)))))
-        (is (= 300 (:tx-id (:state (nth buffers 3)))))))))
+        (is (= -1 (:tx-id @(:state (nth buffers 0)))))
+        (is (= -1 (:tx-id @(:state (nth buffers 1)))))
+        (is (= 200 (:tx-id @(:state (nth buffers 2)))))
+        (is (= 300 (:tx-id @(:state (nth buffers 3)))))))))
 
 (deftest buffer-bm-concurrent
   (testing "BufferBm concurrent access"
@@ -198,7 +200,7 @@
             buffer2 (bm/pin-buffer buffer-bm block-id)
             buffer3 (bm/pin-buffer buffer-bm block-id)]
         (is (= buffer1 buffer2 buffer3) "All returns should be same buffer")
-        (is (= 3 (:pin-count (:state buffer1))) "Pin count should be 3")
+        (is (= 3 (:pin-count @(:state buffer1))) "Pin count should be 3")
         (is (= 2 (bm/available buffer-bm))
             "Only one buffer unavailable")))))
 
@@ -211,16 +213,16 @@
       (let [buffer (bm/pin-buffer buffer-bm block-id)]
         (bm/pin-buffer buffer-bm block-id)
         (bm/pin-buffer buffer-bm block-id)
-        (is (= 3 (:pin-count (:state buffer))))
+        (is (= 3 (:pin-count @(:state buffer))))
 
         (bm/unpin-buffer buffer-bm buffer)
-        (is (= 2 (:pin-count (:state buffer))))
+        (is (= 2 (:pin-count @(:state buffer))))
         (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
         (bm/unpin-buffer buffer-bm buffer)
-        (is (= 1 (:pin-count (:state buffer))))
+        (is (= 1 (:pin-count @(:state buffer))))
         (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
         (bm/unpin-buffer buffer-bm buffer)
-        (is (= 0 (:pin-count (:state buffer))))
+        (is (= 0 (:pin-count @(:state buffer))))
         (is (= 2 (bm/available buffer-bm)) "Now unpinned")))))

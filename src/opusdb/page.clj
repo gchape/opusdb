@@ -1,6 +1,7 @@
 (ns opusdb.page
-  (:import [io.netty.buffer ByteBuf Unpooled PooledByteBufAllocator]
-           [java.nio.charset Charset StandardCharsets]))
+  (:import
+   [java.nio ByteBuffer]
+   [java.nio.charset Charset StandardCharsets]))
 
 (def ^Charset charset StandardCharsets/US_ASCII)
 
@@ -13,42 +14,39 @@
             (int)))))
 
 (defn get-bytes
-  [^ByteBuf buf offset]
+  [^ByteBuffer buf offset]
   (let [length (.getInt buf offset)
-        bytearr (byte-array length)]
-    (.getBytes buf (unchecked-add-int 4 offset) bytearr)
+        ^bytes bytearr (byte-array length)]
+    (.position buf ^int (+ offset 4))
+    (.get buf bytearr)
     bytearr))
 
-(defn set-bytes
-  [^ByteBuf buf offset ^bytes b]
+(defn put-bytes
+  [^ByteBuffer buf offset ^bytes b]
   (let [length (alength b)]
-    (.setInt buf offset length)
-    (.setBytes buf (unchecked-add-int 4 offset) b)))
+    (.putInt buf offset length)
+    (.position buf ^int (+ offset 4))
+    (.put buf b)))
 
 (defn get-string
-  [^ByteBuf buf offset]
-  (let [length (.getInt buf offset)
-        bytearr (byte-array length)]
-    (.getBytes buf (unchecked-add-int 4 offset) bytearr)
-    (String. bytearr charset)))
+  [^ByteBuffer buf offset]
+  (String. ^bytes (get-bytes buf offset) charset))
 
-(defn set-string
-  [^ByteBuf buf offset ^String s]
-  (let [bytearr (.getBytes s charset)
-        length (alength bytearr)]
-    (.setInt buf offset length)
-    (.setBytes buf (unchecked-add-int 4 offset) bytearr)))
+(defn put-string
+  [^ByteBuffer buf offset ^String s]
+  (let [^bytes bytearr (.getBytes s charset)]
+    (put-bytes buf offset bytearr)))
 
 (defmulti make-page class)
 
 (defmethod make-page Integer
   [capacity]
-  (.heapBuffer PooledByteBufAllocator/DEFAULT capacity))
+  (ByteBuffer/allocate capacity))
 
 (defmethod make-page Long
   [capacity]
-  (.heapBuffer PooledByteBufAllocator/DEFAULT capacity))
+  (ByteBuffer/allocate (int capacity)))
 
 (defmethod make-page (class (byte-array 0))
   [^bytes bytearr]
-  (Unpooled/wrappedBuffer bytearr))
+  (ByteBuffer/wrap bytearr))

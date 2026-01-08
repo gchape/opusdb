@@ -12,3 +12,4 @@ pom.xml
 .hg/
 .lsp/
 .clj-kondo/
+.calva/

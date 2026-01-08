@@ -1,73 +1,75 @@
 (ns opusdb.buffer
   (:refer-clojure :exclude [flush])
-  (:require [opusdb.log :as lm]
-            [opusdb.file :as f]
-            [opusdb.page :as p])
-  (:import [opusdb.file FileMgr]
-           [opusdb.log LogMgr]
-           [io.netty.buffer ByteBuf]))
+  (:require
+   [opusdb.file-mgr :as fm]
+   [opusdb.log-mgr :as lm]
+   [opusdb.page :as p])
+  (:import
+   [java.nio ByteBuffer]
+   [opusdb.file_mgr FileMgr]
+   [opusdb.log_mgr LogMgr]))
 
 (defrecord Buffer [^FileMgr file-mgr
                    ^LogMgr log-mgr
-                   ^ByteBuf page
-                   ^clojure.lang.ITransientMap state])
+                   ^ByteBuffer page
+                   ^clojure.lang.Atom state])
 
-(defn pinned? [^Buffer buf]
-  (pos? (:pin-count (.-state buf))))
+(defn pinned? [^Buffer buff]
+  (pos? (:pin-count @(:state buff))))
 
-(defn unpinned? [^Buffer buf]
-  (not (pinned? buf)))
+(defn unpinned? [^Buffer buff]
+  (not (pinned? buff)))
 
-(defn mark-dirty [^Buffer buf new-tx-id new-lsn]
+(defn smear [^Buffer buff new-tx-id new-lsn]
   (when (neg? new-tx-id)
     (throw (IllegalArgumentException.
             "Transaction ID must be non-negative")))
-  (let [state (.-state buf)
-        _ (assoc! state :tx-id new-tx-id)]
-    (when (and new-lsn (not (neg? new-lsn)))
-      (assoc! state :lsn new-lsn))))
+  (swap! (:state buff)
+         (fn [state]
+           (let [state' (assoc state :tx-id new-tx-id)]
+             (if (and new-lsn (not (neg? new-lsn)))
+               (assoc state' :lsn new-lsn)
+               state')))))
 
-(defn pin [^Buffer buf]
-  (let [state (.-state buf)]
-    (assoc! state :pin-count (unchecked-inc-int (:pin-count state)))))
+(defn pin [^Buffer buff]
+  (swap! (:state buff) update :pin-count inc))
 
-(defn unpin [^Buffer buf]
-  (let [state (.-state buf)
-        pin-count   (:pin-count state)]
+(defn unpin [^Buffer buff]
+  (let [pin-count (:pin-count @(:state buff))]
     (when (zero? pin-count)
       (throw (IllegalStateException.
               "Cannot unpin buffer with pin-count 0")))
-    (assoc! state :pin-count (unchecked-dec-int pin-count))))
+    (swap! (:state buff) update :pin-count dec)))
 
-(defn flush [^Buffer buf]
-  (let [state (.-state buf)
+(defn flush [^Buffer buff]
+  (let [state @(:state buff)
         tx-id (:tx-id state)]
     (when (not= tx-id -1)
       (let [block-id (:block-id state)]
         (when-not block-id
           (throw (IllegalStateException.
                   "Cannot flush: buffer has no assigned block")))
-        (lm/flush (.-log-mgr buf) (:lsn state))
-        (f/write (.-file-mgr buf) block-id (.-page buf))
-        (assoc! state :tx-id -1)))))
+        (lm/flush (:log-mgr buff) (:lsn state))
+        (fm/write (:file-mgr buff) block-id (:page buff))
+        (swap! (:state buff) assoc :tx-id -1)))))
 
-(defn assign-to-block [^Buffer buf block-id]
-  (flush buf)
-  (f/read (.-file-mgr buf) block-id (.-page buf))
-  (conj! (.-state buf)
-         {:block-id block-id
-          :pin-count 0
-          :tx-id -1
-          :lsn -1}))
+(defn assign-to-block [^Buffer buff block-id]
+  (flush buff)
+  (fm/read (:file-mgr buff) block-id (:page buff))
+  (reset! (:state buff)
+          {:block-id block-id
+           :pin-count 0
+           :tx-id -1
+           :lsn -1}))
 
 (defn make-buffer
   [^FileMgr file-mgr ^LogMgr log-mgr]
-  (let [block-size (f/block-size file-mgr)
+  (let [block-size (fm/block-size file-mgr)
         page (p/make-page block-size)]
     (Buffer. file-mgr
              log-mgr
              page
-             (transient {:block-id nil
-                         :pin-count 0
-                         :tx-id -1
-                         :lsn -1}))))
+             (atom {:block-id nil
+                    :pin-count 0
+                    :tx-id -1
+                    :lsn -1}))))

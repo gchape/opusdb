@@ -1,13 +1,15 @@
-(ns opusdb.file-test
-  (:require [clojure.test :refer [deftest testing is use-fixtures]]
-            [opusdb.file :as fm]
-            [opusdb.page :as p])
-  (:import [java.io File]))
+(ns opusdb.file-mgr-test
+  (:require
+   [clojure.test :refer [deftest is testing use-fixtures]]
+   [opusdb.file-mgr :as fm]
+   [opusdb.page :as p])
+  (:import
+   [java.io File]
+   [java.nio ByteBuffer]))
 
 (def test-db-dir "test-db")
 (def test-block-size 4096)
 
-;; ---------- helpers ----------
 (defn delete-dir [path]
   (let [file (File. path)]
     (when (.exists file)
@@ -31,13 +33,21 @@
   (fm/make-file-mgr db-dir test-block-size))
 
 (defn read-bytes
-  "Read n bytes from a ByteBuf starting at offset 0."
-  [buf n]
-  (let [arr (byte-array n)]
-    (.getBytes buf 0 arr)
+  "Read n bytes from a ByteBuffer starting at offset 0."
+  [^ByteBuffer buf n]
+  (let [arr (byte-array n)
+        bb  (.duplicate buf)]
+    (.position bb 0)
+    (.get bb arr)
     (seq arr)))
 
-;; ---------- tests ----------
+(defn write-bytes
+  "Write bytes to a ByteBuffer starting at offset 0."
+  [^ByteBuffer buf ^bytes bs]
+  (let [bb (.duplicate buf)]
+    (.position bb 0)
+    (.put bb bs)))
+
 (deftest test-make-file-mgr
   (let [db-dir (unique-test-db-dir)]
     (testing "creates file manager"
@@ -86,7 +96,7 @@
       (let [mgr (setup-fm db-dir)
             block (fm/append mgr "test.db")
             buf (p/make-page test-block-size)]
-        (.setBytes buf 0 (byte-array [1 2 3 4 5]))
+        (write-bytes buf (byte-array [1 2 3 4 5]))
         (fm/write mgr block buf)
 
         (let [read-buf (p/make-page test-block-size)]
@@ -99,8 +109,8 @@
             b2 (fm/append mgr "test.db")
             buf1 (p/make-page test-block-size)
             buf2 (p/make-page test-block-size)]
-        (.setBytes buf1 0 (byte-array [10 20 30]))
-        (.setBytes buf2 0 (byte-array [40 50 60]))
+        (write-bytes buf1 (byte-array [10 20 30]))
+        (write-bytes buf2 (byte-array [40 50 60]))
         (fm/write mgr b1 buf1)
         (fm/write mgr b2 buf2)
 
@@ -116,9 +126,9 @@
             block (fm/append mgr "test.db")
             buf1 (p/make-page test-block-size)
             buf2 (p/make-page test-block-size)]
-        (.setBytes buf1 0 (byte-array [1 2 3]))
+        (write-bytes buf1 (byte-array [1 2 3]))
         (fm/write mgr block buf1)
-        (.setBytes buf2 0 (byte-array [7 8 9]))
+        (write-bytes buf2 (byte-array [7 8 9]))
         (fm/write mgr block buf2)
 
         (let [r (p/make-page test-block-size)]
@@ -133,8 +143,8 @@
             b2 (fm/append mgr "file2.db")
             buf1 (p/make-page test-block-size)
             buf2 (p/make-page test-block-size)]
-        (.setBytes buf1 0 (byte-array [100 101]))
-        (.setBytes buf2 0 (byte-array [50 51]))
+        (write-bytes buf1 (byte-array [100 101]))
+        (write-bytes buf2 (byte-array [50 51]))
         (fm/write mgr b1 buf1)
         (fm/write mgr b2 buf2)
 
@@ -153,7 +163,7 @@
             values [11 22 33]]
         (doseq [[block v] (map vector blocks values)]
           (let [buf (p/make-page test-block-size)]
-            (.setBytes buf 0 (byte-array [v]))
+            (write-bytes buf (byte-array [v]))
             (fm/write mgr block buf)))
 
         (doseq [[block expected] (map vector blocks values)]
