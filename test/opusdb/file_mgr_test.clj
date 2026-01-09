@@ -72,19 +72,19 @@
   (let [db-dir (unique-test-db-dir)]
     (testing "appends single block"
       (let [mgr (setup-fm db-dir)
-            block (fm/append mgr "test.db")]
+            block (fm/append! mgr "test.db")]
         (is (= "test.db" (:file-name block)))
         (is (= 0 (:index block)))))
 
     (testing "appends multiple blocks"
       (let [mgr (setup-fm db-dir)
-            blocks (doall (repeatedly 3 #(fm/append mgr "test.db")))]
+            blocks (doall (repeatedly 3 #(fm/append! mgr "test.db")))]
         (is (= [1 2 3] (map :index blocks)))))
 
     (testing "appends to different files"
       (let [mgr (setup-fm db-dir)
-            b1 (fm/append mgr "file1.db")
-            b2 (fm/append mgr "file2.db")]
+            b1 (fm/append! mgr "file1.db")
+            b2 (fm/append! mgr "file2.db")]
         (is (= 0 (:index b1)))
         (is (= 0 (:index b2)))
         (is (= "file1.db" (:file-name b1)))
@@ -94,10 +94,10 @@
   (let [db-dir (unique-test-db-dir)]
     (testing "single block write/read"
       (let [mgr (setup-fm db-dir)
-            block (fm/append mgr "test.db")
+            block (fm/append! mgr "test.db")
             buf (p/make-page test-block-size)]
         (write-bytes buf (byte-array [1 2 3 4 5]))
-        (fm/write mgr block buf)
+        (fm/write! mgr block buf)
 
         (let [read-buf (p/make-page test-block-size)]
           (fm/read mgr block read-buf)
@@ -105,14 +105,14 @@
 
     (testing "multiple blocks"
       (let [mgr (setup-fm db-dir)
-            b1 (fm/append mgr "test.db")
-            b2 (fm/append mgr "test.db")
+            b1 (fm/append! mgr "test.db")
+            b2 (fm/append! mgr "test.db")
             buf1 (p/make-page test-block-size)
             buf2 (p/make-page test-block-size)]
         (write-bytes buf1 (byte-array [10 20 30]))
         (write-bytes buf2 (byte-array [40 50 60]))
-        (fm/write mgr b1 buf1)
-        (fm/write mgr b2 buf2)
+        (fm/write! mgr b1 buf1)
+        (fm/write! mgr b2 buf2)
 
         (let [r1 (p/make-page test-block-size)
               r2 (p/make-page test-block-size)]
@@ -123,13 +123,13 @@
 
     (testing "overwrite block"
       (let [mgr (setup-fm db-dir)
-            block (fm/append mgr "test.db")
+            block (fm/append! mgr "test.db")
             buf1 (p/make-page test-block-size)
             buf2 (p/make-page test-block-size)]
         (write-bytes buf1 (byte-array [1 2 3]))
-        (fm/write mgr block buf1)
+        (fm/write! mgr block buf1)
         (write-bytes buf2 (byte-array [7 8 9]))
-        (fm/write mgr block buf2)
+        (fm/write! mgr block buf2)
 
         (let [r (p/make-page test-block-size)]
           (fm/read mgr block r)
@@ -139,14 +139,14 @@
   (let [db-dir (unique-test-db-dir)]
     (testing "independent files"
       (let [mgr (setup-fm db-dir)
-            b1 (fm/append mgr "file1.db")
-            b2 (fm/append mgr "file2.db")
+            b1 (fm/append! mgr "file1.db")
+            b2 (fm/append! mgr "file2.db")
             buf1 (p/make-page test-block-size)
             buf2 (p/make-page test-block-size)]
         (write-bytes buf1 (byte-array [100 101]))
         (write-bytes buf2 (byte-array [50 51]))
-        (fm/write mgr b1 buf1)
-        (fm/write mgr b2 buf2)
+        (fm/write! mgr b1 buf1)
+        (fm/write! mgr b2 buf2)
 
         (let [r1 (p/make-page test-block-size)
               r2 (p/make-page test-block-size)]
@@ -159,12 +159,12 @@
   (let [db-dir (unique-test-db-dir)]
     (testing "blocks aligned correctly"
       (let [mgr (setup-fm db-dir)
-            blocks (doall (repeatedly 3 #(fm/append mgr "test.db")))
+            blocks (doall (repeatedly 3 #(fm/append! mgr "test.db")))
             values [11 22 33]]
         (doseq [[block v] (map vector blocks values)]
           (let [buf (p/make-page test-block-size)]
             (write-bytes buf (byte-array [v]))
-            (fm/write mgr block buf)))
+            (fm/write! mgr block buf)))
 
         (doseq [[block expected] (map vector blocks values)]
           (let [buf (p/make-page test-block-size)]

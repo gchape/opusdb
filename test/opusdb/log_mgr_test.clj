@@ -43,7 +43,7 @@
 (defn- append-records
   "Append multiple string records to log manager."
   [log-mgr records]
-  (mapv #(lm/append log-mgr (str->bytes %)) records))
+  (mapv #(lm/append! log-mgr (str->bytes %)) records))
 
 (defn- read-records
   "Read all records from log manager as strings."
@@ -64,23 +64,23 @@
 (deftest test-flush-empty-log
   (testing "Flushing empty log doesn't cause errors"
     (let [[log-mgr] (make-test-log-mgr)]
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (is (empty? (seq log-mgr))))))
 
 (deftest test-append-single-record
   (testing "Appending and retrieving a single record"
     (let [[log-mgr] (make-test-log-mgr)
-          lsn (lm/append log-mgr (str->bytes "Test record 1"))]
+          lsn (lm/append! log-mgr (str->bytes "Test record 1"))]
       (is (= 1 lsn))
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (is (= ["Test record 1"] (read-records log-mgr))))))
 
 (deftest test-append-without-flush
   (testing "Records not visible until flushed"
     (let [[log-mgr] (make-test-log-mgr)]
-      (lm/append log-mgr (str->bytes "Not flushed"))
+      (lm/append! log-mgr (str->bytes "Not flushed"))
       (is (empty? (seq log-mgr)))
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (is (= ["Not flushed"] (read-records log-mgr))))))
 
 (deftest test-append-multiple-records
@@ -89,7 +89,7 @@
           records ["Record 1" "Record 2" "Record 3"]
           lsns (append-records log-mgr records)]
       (is (= [1 2 3] lsns))
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (is (= records (read-records log-mgr))))))
 
 (deftest test-record-ordering
@@ -97,15 +97,15 @@
     (let [[log-mgr] (make-test-log-mgr)
           records (mapv #(str "Record-" %) (range 20))]
       (append-records log-mgr records)
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (is (= records (read-records log-mgr))))))
 
 (deftest test-lsn-increments
   (testing "LSN increments correctly for each append"
     (let [[log-mgr] (make-test-log-mgr)
-          lsn1 (lm/append log-mgr (str->bytes "First"))
-          lsn2 (lm/append log-mgr (str->bytes "Second"))
-          lsn3 (lm/append log-mgr (str->bytes "Third"))]
+          lsn1 (lm/append! log-mgr (str->bytes "First"))
+          lsn2 (lm/append! log-mgr (str->bytes "Second"))
+          lsn3 (lm/append! log-mgr (str->bytes "Third"))]
       (is (= 1 lsn1))
       (is (= 2 lsn2))
       (is (= 3 lsn3)))))
@@ -113,29 +113,29 @@
 (deftest test-flush-by-lsn
   (testing "Conditional flushing based on LSN threshold"
     (let [[log-mgr] (make-test-log-mgr)
-          _ (lm/append log-mgr (str->bytes "Record 1"))
-          lsn2 (lm/append log-mgr (str->bytes "Record 2"))]
-      (lm/flush log-mgr 0)
-      (lm/flush log-mgr lsn2)
+          _ (lm/append! log-mgr (str->bytes "Record 1"))
+          lsn2 (lm/append! log-mgr (str->bytes "Record 2"))]
+      (lm/flush! log-mgr 0)
+      (lm/flush! log-mgr lsn2)
       (is (= ["Record 1" "Record 2"] (read-records log-mgr))))))
 
 (deftest test-multiple-flushes
   (testing "Multiple flushes preserve all data"
     (let [[log-mgr] (make-test-log-mgr)]
-      (lm/append log-mgr (str->bytes "First"))
-      (lm/flush log-mgr)
-      (lm/append log-mgr (str->bytes "Second"))
-      (lm/flush log-mgr)
-      (lm/append log-mgr (str->bytes "Third"))
-      (lm/flush log-mgr)
+      (lm/append! log-mgr (str->bytes "First"))
+      (lm/flush! log-mgr)
+      (lm/append! log-mgr (str->bytes "Second"))
+      (lm/flush! log-mgr)
+      (lm/append! log-mgr (str->bytes "Third"))
+      (lm/flush! log-mgr)
       (is (= ["First" "Second" "Third"] (read-records log-mgr))))))
 
 (deftest test-large-record
   (testing "Appending a record near block size boundary"
     (let [[log-mgr] (make-test-log-mgr)
           large-record (apply str (repeat (- block-size 20) "A"))]
-      (lm/append log-mgr (str->bytes large-record))
-      (lm/flush log-mgr)
+      (lm/append! log-mgr (str->bytes large-record))
+      (lm/flush! log-mgr)
       (is (= [large-record] (read-records log-mgr))))))
 
 (deftest test-block-boundary
@@ -143,9 +143,9 @@
     (let [[log-mgr] (make-test-log-mgr)
           large-record (apply str (repeat 100 "X"))
           record-count 5
-          lsns (repeatedly record-count #(lm/append log-mgr (str->bytes large-record)))]
+          lsns (repeatedly record-count #(lm/append! log-mgr (str->bytes large-record)))]
       (is (= (range 1 (inc record-count)) lsns))
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (let [records (read-records log-mgr)]
         (is (= record-count (count records)))
         (is (every? #(= large-record %) records))))))
@@ -157,7 +157,7 @@
           records ["First" "Second" "Third"]]
       (let [log-mgr1 (lm/make-log-mgr file-mgr log-file)]
         (append-records log-mgr1 records)
-        (lm/flush log-mgr1))
+        (lm/flush! log-mgr1))
       (let [file-mgr2 (make-file-mgr test-dir block-size)
             log-mgr2 (lm/make-log-mgr file-mgr2 log-file)]
         (is (= records (read-records log-mgr2)))))))
@@ -166,8 +166,8 @@
   (testing "Appending and retrieving binary data"
     (let [[log-mgr] (make-test-log-mgr)
           binary-data (byte-array (range -128 128))]
-      (lm/append log-mgr binary-data)
-      (lm/flush log-mgr)
+      (lm/append! log-mgr binary-data)
+      (lm/flush! log-mgr)
       (is (= (seq binary-data) (seq (first (seq log-mgr))))))))
 
 (deftest test-concurrent-appends
@@ -180,7 +180,7 @@
                    (for [i (range thread-count)]
                      (future
                        (dotimes [j records-per-thread]
-                         (lm/append log-mgr (str->bytes (str "Thread-" i "-Record-" j)))))))]
+                         (lm/append! log-mgr (str->bytes (str "Thread-" i "-Record-" j)))))))]
       (doseq [f futures] @f)
-      (lm/flush log-mgr)
+      (lm/flush! log-mgr)
       (is (= expected-total (count (seq log-mgr)))))))

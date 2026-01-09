@@ -75,11 +75,11 @@
       :else (assoc (splay (:right t) (leftmost-key (:right t)))
                    :left (:left t)))))
 
-(defn- put_ [t k v]
+(defn- put [t k v]
   (cond
     (nil? t) (make-node k v)
-    (neg? (compare k (:key t))) (assoc t :left (put_ (:left t) k v))
-    (pos? (compare k (:key t))) (assoc t :right (put_ (:right t) k v))
+    (neg? (compare k (:key t))) (assoc t :left (put (:left t) k v))
+    (pos? (compare k (:key t))) (assoc t :right (put (:right t) k v))
     :else (assoc t :value v)))
 
 (defn- key-exists? [t k]
@@ -90,7 +90,7 @@
       (pos? (compare k (:key node))) (recur (:right node))
       :else true)))
 
-(defn put [{:keys [tree size type eviction-fn count]} k v]
+(defn put! [{:keys [tree size type eviction-fn count]} k v]
   (let [t @tree
         current-count @count
         existing? (key-exists? t k)]
@@ -100,12 +100,12 @@
             t' (remove t type)]
         (when eviction-fn
           (eviction-fn (:key victim) (:value victim)))
-        (reset! tree (splay (put_ t' k v) k)))
+        (reset! tree (splay (put t' k v) k)))
       ;; Cache has space or we're updating existing key
       (do
         (when-not existing?
           (swap! count inc))
-        (reset! tree (splay (put_ t k v) k))))))
+        (reset! tree (splay (put t k v) k))))))
 
 (defn get [{:keys [tree]} k]
   (when-let [t (splay @tree k)]

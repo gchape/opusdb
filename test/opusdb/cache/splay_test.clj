@@ -18,18 +18,18 @@
 (deftest test-put-and-get
   (testing "Put and get single item"
     (let [c (cache/make-cache 3 nil)]
-      (cache/put c 1 "one")
+      (cache/put! c 1 "one")
       (is (= "one" (cache/get c 1)))))
 
   (testing "Get non-existent key returns nil"
     (let [c (cache/make-cache 3 nil)]
-      (cache/put c 1 "one")
+      (cache/put! c 1 "one")
       (is (nil? (cache/get c 99)))))
 
   (testing "Overwriting existing key updates value"
     (let [c (cache/make-cache 3 nil)]
-      (cache/put c 1 "one")
-      (cache/put c 1 "ONE")
+      (cache/put! c 1 "one")
+      (cache/put! c 1 "ONE")
       (is (= "ONE" (cache/get c 1))))))
 
 (deftest test-lru-eviction
@@ -37,10 +37,10 @@
     (let [evicted (atom [])
           eviction-fn (fn [k v] (swap! evicted conj [k v]))
           c (cache/make-cache 3 eviction-fn "LRU")]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
-      (cache/put c 4 "four")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
+      (cache/put! c 4 "four")
 
       (is (= 1 (count @evicted)))
       (is (nil? (cache/get c 1)))
@@ -50,10 +50,10 @@
     (let [evicted (atom [])
           eviction-fn (fn [k v] (swap! evicted conj [k v]))
           c (cache/make-cache 2 eviction-fn "LRU")]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
-      (cache/put c 4 "four")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
+      (cache/put! c 4 "four")
 
       (is (= 2 (count @evicted))))))
 
@@ -62,10 +62,10 @@
     (let [evicted (atom [])
           eviction-fn (fn [k v] (swap! evicted conj [k v]))
           c (cache/make-cache 3 eviction-fn "MRU")]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
-      (cache/put c 4 "four")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
+      (cache/put! c 4 "four")
 
       (is (= 1 (count @evicted)))
       (is (= "four" (cache/get c 4)))))
@@ -74,15 +74,15 @@
     (let [evicted (atom [])
           eviction-fn (fn [k v] (swap! evicted conj [k v]))
           c (cache/make-cache 3 eviction-fn "MRU")]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
 
       ;; Access key 2 → becomes root
       (cache/get c 2)
 
       ;; Insert key 4 → evict MRU (key 2)
-      (cache/put c 4 "four")
+      (cache/put! c 4 "four")
 
       (is (= 1 (count @evicted)))
       (is (nil? (cache/get c 2)))
@@ -93,17 +93,17 @@
     (let [evicted (atom [])
           eviction-fn (fn [k v] (swap! evicted conj {:key k :value v}))
           c (cache/make-cache 2 eviction-fn)]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
 
       (is (= [{:key 1 :value "one"}] @evicted))))
 
   (testing "No callback when eviction-fn is nil"
     (let [c (cache/make-cache 2 nil)]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
       (is (= "three" (cache/get c 3))))))
 
 (deftest test-edge-cases
@@ -111,9 +111,9 @@
     (let [evicted (atom [])
           eviction-fn (fn [k v] (swap! evicted conj [k v]))
           c (cache/make-cache 1 eviction-fn)]
-      (cache/put c 1 "one")
+      (cache/put! c 1 "one")
       (is (= "one" (cache/get c 1)))
-      (cache/put c 2 "two")
+      (cache/put! c 2 "two")
       (is (= [[1 "one"]] @evicted))
       (is (nil? (cache/get c 1)))
       (is (= "two" (cache/get c 2)))))
@@ -124,26 +124,26 @@
 
   (testing "Put with nil value"
     (let [c (cache/make-cache 3 nil)]
-      (cache/put c 1 nil)
+      (cache/put! c 1 nil)
       (is (nil? (cache/get c 1)))))
 
   (testing "Large keys and values"
     (let [c (cache/make-cache 3 nil)]
-      (cache/put c 999999 "large-key-value")
+      (cache/put! c 999999 "large-key-value")
       (is (= "large-key-value" (cache/get c 999999))))))
 
 (deftest test-multiple-caches
   (testing "Multiple caches are independent"
     (let [c1 (cache/make-cache 2 nil)
           c2 (cache/make-cache 3 nil)]
-      (cache/put c1 1 "cache1-one")
-      (cache/put c2 1 "cache2-one")
+      (cache/put! c1 1 "cache1-one")
+      (cache/put! c2 1 "cache2-one")
 
       (is (= "cache1-one" (cache/get c1 1)))
       (is (= "cache2-one" (cache/get c2 1)))
 
-      (cache/put c1 2 "cache1-two")
-      (cache/put c2 2 "cache2-two")
+      (cache/put! c1 2 "cache1-two")
+      (cache/put! c2 2 "cache2-two")
 
       (is (= "cache1-two" (cache/get c1 2)))
       (is (= "cache2-two" (cache/get c2 2))))))
@@ -151,7 +151,7 @@
 (deftest test-splay-on-access
   (testing "Put operation splays inserted key to root"
     (let [c (cache/make-cache 5 nil)]
-      (cache/put c 1 "one")
-      (cache/put c 2 "two")
-      (cache/put c 3 "three")
+      (cache/put! c 1 "one")
+      (cache/put! c 2 "two")
+      (cache/put! c 3 "three")
       (is (= 3 (:key @(:tree c)))))))

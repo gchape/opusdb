@@ -17,7 +17,7 @@
 
 (defn ensure-block-exists [file-bm block-id]
   (when-not (.exists (File. (str (:db-dir file-bm) "/" (:file-name block-id))))
-    (fm/append file-bm (:file-name block-id))))
+    (fm/append! file-bm (:file-name block-id))))
 
 (defn cleanup-fixture [f]
   (try
@@ -45,20 +45,20 @@
 
       (is (= 3 (bm/available buffer-bm)) "Initial available count")
 
-      (let [buffer1 (bm/pin-buffer buffer-bm block-id)]
+      (let [buffer1 (bm/pin-buffer! buffer-bm block-id)]
         (is (= 2 (bm/available buffer-bm))
             "Available count decreases after pinning")
 
-        (let [buf2 (bm/pin-buffer buffer-bm block-id)]
+        (let [buf2 (bm/pin-buffer! buffer-bm block-id)]
           (is (= buffer1 buf2) "Same buffer returned for same block")
           (is (= 2 (bm/available buffer-bm))
               "Available count unchanged when pinning same buffer"))
 
-        (bm/unpin-buffer buffer-bm buffer1)
+        (bm/unpin-buffer! buffer-bm buffer1)
         (is (= 2 (bm/available buffer-bm))
             "Available count unchanged after first unpin (still pinned)")
 
-        (bm/unpin-buffer buffer-bm buffer1)
+        (bm/unpin-buffer! buffer-bm buffer1)
         (is (= 3 (bm/available buffer-bm))
             "Available count increases when buffer fully unpinned")))))
 
@@ -72,9 +72,9 @@
       (ensure-block-exists file-bm block-id2)
       (ensure-block-exists file-bm block-id3)
 
-      (let [buffer1 (bm/pin-buffer buffer-bm block-id1)
-            buf2 (bm/pin-buffer buffer-bm block-id2)
-            buf3 (bm/pin-buffer buffer-bm block-id3)]
+      (let [buffer1 (bm/pin-buffer! buffer-bm block-id1)
+            buf2 (bm/pin-buffer! buffer-bm block-id2)
+            buf3 (bm/pin-buffer! buffer-bm block-id3)]
         (is (not= buffer1 buf2) "Different buffers for different blocks")
         (is (not= buf2 buf3) "Different buffers for different blocks")
         (is (not= buffer1 buf3) "Different buffers for different blocks")
@@ -96,14 +96,14 @@
       (ensure-block-exists file-bm block-id2)
       (ensure-block-exists file-bm block-id3)
 
-      (let [buffer1 (bm/pin-buffer buffer-bm block-id1)]
-        (bm/pin-buffer buffer-bm block-id2)
+      (let [buffer1 (bm/pin-buffer! buffer-bm block-id1)]
+        (bm/pin-buffer! buffer-bm block-id2)
         (is (= 0 (bm/available buffer-bm)))
 
-        (bm/unpin-buffer buffer-bm buffer1)
+        (bm/unpin-buffer! buffer-bm buffer1)
         (is (= 1 (bm/available buffer-bm)))
 
-        (let [buf3 (bm/pin-buffer buffer-bm block-id3)]
+        (let [buf3 (bm/pin-buffer! buffer-bm block-id3)]
           (is (= buffer1 buf3) "Unpinned buffer should be reused")
           (is (= block-id3 (:block-id @(:state buf3))) "Reused buffer has new block")
           (is (= 0 (bm/available buffer-bm))))))))
@@ -116,10 +116,10 @@
       (ensure-block-exists file-bm block-id1)
       (ensure-block-exists file-bm block-id2)
 
-      (bm/pin-buffer buffer-bm block-id1)
+      (bm/pin-buffer! buffer-bm block-id1)
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Buffer abort: waiting too long"
-                            (bm/pin-buffer buffer-bm block-id2))
+                            (bm/pin-buffer! buffer-bm block-id2))
           "Should timeout when no buffers available"))))
 
 (deftest buffer-bm-flush
@@ -132,14 +132,14 @@
       (ensure-block-exists file-bm block-id2)
       (ensure-block-exists file-bm block-id3)
 
-      (let [buffer1 (bm/pin-buffer buffer-bm block-id1)
-            buffer2 (bm/pin-buffer buffer-bm block-id2)
-            buf3 (bm/pin-buffer buffer-bm block-id3)]
-        (b/smear buffer1 10 100)
-        (b/smear buffer2 10 101)
-        (b/smear buf3 20 102)
+      (let [buffer1 (bm/pin-buffer! buffer-bm block-id1)
+            buffer2 (bm/pin-buffer! buffer-bm block-id2)
+            buf3 (bm/pin-buffer! buffer-bm block-id3)]
+        (b/smear! buffer1 10 100)
+        (b/smear! buffer2 10 101)
+        (b/smear! buf3 20 102)
 
-        (bm/flush buffer-bm 10)
+        (bm/flush! buffer-bm 10)
 
         (is (= -1 (:tx-id @(:state buffer1))) "Buffer 1 should be flushed")
         (is (= -1 (:tx-id @(:state buffer2))) "Buffer 2 should be flushed")
@@ -152,13 +152,13 @@
       (doseq [block-id blocks]
         (ensure-block-exists file-bm block-id))
 
-      (let [buffers (mapv #(bm/pin-buffer buffer-bm %) blocks)]
-        (b/smear (nth buffers 0) 100 1000)
-        (b/smear (nth buffers 1) 100 1001)
-        (b/smear (nth buffers 2) 200 1002)
-        (b/smear (nth buffers 3) 300 1003)
+      (let [buffers (mapv #(bm/pin-buffer! buffer-bm %) blocks)]
+        (b/smear! (nth buffers 0) 100 1000)
+        (b/smear! (nth buffers 1) 100 1001)
+        (b/smear! (nth buffers 2) 200 1002)
+        (b/smear! (nth buffers 3) 300 1003)
 
-        (bm/flush buffer-bm 100)
+        (bm/flush! buffer-bm 100)
 
         (is (= -1 (:tx-id @(:state (nth buffers 0)))))
         (is (= -1 (:tx-id @(:state (nth buffers 1)))))
@@ -176,9 +176,9 @@
                                 #(Thread.
                                   (fn []
                                     (try
-                                      (let [buf (bm/pin-buffer buffer-bm block-id)]
+                                      (let [buf (bm/pin-buffer! buffer-bm block-id)]
                                         (Thread/sleep 10)
-                                        (bm/unpin-buffer buffer-bm buf)
+                                        (bm/unpin-buffer! buffer-bm buf)
                                         (swap! results conj :success))
                                       (catch Exception _
                                         (swap! results conj :error))))))]
@@ -196,9 +196,9 @@
           block-id {:file-name "f1" :index 0}]
       (ensure-block-exists file-bm block-id)
 
-      (let [buffer1 (bm/pin-buffer buffer-bm block-id)
-            buffer2 (bm/pin-buffer buffer-bm block-id)
-            buffer3 (bm/pin-buffer buffer-bm block-id)]
+      (let [buffer1 (bm/pin-buffer! buffer-bm block-id)
+            buffer2 (bm/pin-buffer! buffer-bm block-id)
+            buffer3 (bm/pin-buffer! buffer-bm block-id)]
         (is (= buffer1 buffer2 buffer3) "All returns should be same buffer")
         (is (= 3 (:pin-count @(:state buffer1))) "Pin count should be 3")
         (is (= 2 (bm/available buffer-bm))
@@ -210,19 +210,19 @@
           block-id {:file-name "f1" :index 0}]
       (ensure-block-exists file-bm block-id)
 
-      (let [buffer (bm/pin-buffer buffer-bm block-id)]
-        (bm/pin-buffer buffer-bm block-id)
-        (bm/pin-buffer buffer-bm block-id)
+      (let [buffer (bm/pin-buffer! buffer-bm block-id)]
+        (bm/pin-buffer! buffer-bm block-id)
+        (bm/pin-buffer! buffer-bm block-id)
         (is (= 3 (:pin-count @(:state buffer))))
 
-        (bm/unpin-buffer buffer-bm buffer)
+        (bm/unpin-buffer! buffer-bm buffer)
         (is (= 2 (:pin-count @(:state buffer))))
         (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
-        (bm/unpin-buffer buffer-bm buffer)
+        (bm/unpin-buffer! buffer-bm buffer)
         (is (= 1 (:pin-count @(:state buffer))))
         (is (= 1 (bm/available buffer-bm)) "Still pinned")
 
-        (bm/unpin-buffer buffer-bm buffer)
+        (bm/unpin-buffer! buffer-bm buffer)
         (is (= 0 (:pin-count @(:state buffer))))
         (is (= 2 (bm/available buffer-bm)) "Now unpinned")))))

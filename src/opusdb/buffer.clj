@@ -20,7 +20,7 @@
 (defn unpinned? [^Buffer buff]
   (not (pinned? buff)))
 
-(defn smear [^Buffer buff new-tx-id new-lsn]
+(defn smear! [^Buffer buff new-tx-id new-lsn]
   (when (neg? new-tx-id)
     (throw (IllegalArgumentException.
             "Transaction ID must be non-negative")))
@@ -31,17 +31,17 @@
                (assoc state' :lsn new-lsn)
                state')))))
 
-(defn pin [^Buffer buff]
+(defn pin! [^Buffer buff]
   (swap! (:state buff) update :pin-count inc))
 
-(defn unpin [^Buffer buff]
+(defn unpin! [^Buffer buff]
   (let [pin-count (:pin-count @(:state buff))]
     (when (zero? pin-count)
       (throw (IllegalStateException.
               "Cannot unpin buffer with pin-count 0")))
     (swap! (:state buff) update :pin-count dec)))
 
-(defn flush [^Buffer buff]
+(defn flush! [^Buffer buff]
   (let [state @(:state buff)
         tx-id (:tx-id state)]
     (when (not= tx-id -1)
@@ -49,12 +49,12 @@
         (when-not block-id
           (throw (IllegalStateException.
                   "Cannot flush: buffer has no assigned block")))
-        (lm/flush (:log-mgr buff) (:lsn state))
-        (fm/write (:file-mgr buff) block-id (:page buff))
+        (lm/flush! (:log-mgr buff) (:lsn state))
+        (fm/write! (:file-mgr buff) block-id (:page buff))
         (swap! (:state buff) assoc :tx-id -1)))))
 
-(defn assign-to-block [^Buffer buff block-id]
-  (flush buff)
+(defn assign-to-block! [^Buffer buff block-id]
+  (flush! buff)
   (fm/read (:file-mgr buff) block-id (:page buff))
   (reset! (:state buff)
           {:block-id block-id

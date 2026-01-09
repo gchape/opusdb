@@ -11,7 +11,7 @@
                  ^String file-name
                  ^ByteBuffer page
                  ^clojure.lang.Atom state]
-  
+
   clojure.lang.Seqable
   (^clojure.lang.ISeq seq [_]
     (let [block-size (fm/block-size file-mgr)
@@ -32,19 +32,18 @@
        '()
        (range index -1 -1)))))
 
-(defn flush
+(defn flush!
   ([^LogMgr log-mgr]
    (let [fm   (.-file-mgr log-mgr)
          page (.-page log-mgr)
-         state-atom (.-state log-mgr)
-         state-val @state-atom]
-     (fm/write fm (:block-id state-val) page)
-     (swap! state-atom assoc :last-saved-lsn (:latest-lsn state-val))))
+         state (.-state log-mgr)]
+     (fm/write! fm (:block-id @state) page)
+     (swap! state assoc :last-saved-lsn (:latest-lsn @state))))
   ([^LogMgr log-mgr lsn]
    (when (>= lsn (:last-saved-lsn @(.-state log-mgr)))
-     (flush log-mgr))))
+     (flush! log-mgr))))
 
-(defn append
+(defn append!
   [^LogMgr log-mgr ^bytes rec]
   (locking log-mgr
     (let [^ByteBuffer page (.-page log-mgr)
@@ -54,8 +53,8 @@
           length   (alength rec)
           bytes-needed (+ length 4)]
       (when (< pos (+ bytes-needed 4))
-        (flush log-mgr)
-        (let [new-block-id (fm/append fm (.-file-name log-mgr))]
+        (flush! log-mgr)
+        (let [new-block-id (fm/append! fm (.-file-name log-mgr))]
           (.putInt page 0 (fm/block-size fm))
           (swap! state-atom assoc :block-id new-block-id)))
       (let [pos (.getInt page 0)
@@ -73,9 +72,9 @@
         file-size (fm/file-size file-mgr file-name)
         block-id
         (if (zero? file-size)
-          (let [block-id (fm/append file-mgr file-name)]
+          (let [block-id (fm/append! file-mgr file-name)]
             (.putInt page 0 block-size)
-            (fm/write file-mgr block-id page)
+            (fm/write! file-mgr block-id page)
             block-id)
           (let [block-id {:file-name file-name
                           :index (dec (quot file-size block-size))}]

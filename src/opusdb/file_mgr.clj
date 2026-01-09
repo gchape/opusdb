@@ -9,41 +9,41 @@
    [java.nio.file StandardOpenOption]
    [java.util LinkedHashMap]))
 
-(defn- eviction-fn [{:keys [_ value]}]
+(defn- eviction-fn
+  [{:keys [_ value]}]
   (.close ^FileChannel value)
   true)
 
-(defn- block-offset
-  [file-mgr index]
-  (* index (:block-size file-mgr)))
+(defn- get-lock
+  [file-mgr file-name]
+  (nth (:locks file-mgr)
+       (mod (hash file-name) (count (:locks file-mgr)))))
 
-(defn- open-channel
+(defn- make-channel
   [^LinkedHashMap channel-pool db-dir file-name]
   (locking channel-pool
-    (or (.get channel-pool file-name)
-        (let [path (.toPath (File. (str db-dir "/" file-name)))
-              channel (FileChannel/open
-                       path
-                       (into-array StandardOpenOption
-                                   [StandardOpenOption/READ
-                                    StandardOpenOption/WRITE
-                                    StandardOpenOption/DSYNC
-                                    StandardOpenOption/CREATE]))]
-          (.put channel-pool file-name channel)
-          channel))))
+    (let [path (.toPath (File. (str db-dir "/" file-name)))
+          channel (FileChannel/open
+                   path
+                   (into-array StandardOpenOption
+                               [StandardOpenOption/READ
+                                StandardOpenOption/WRITE
+                                StandardOpenOption/DSYNC
+                                StandardOpenOption/CREATE]))]
+      (.put channel-pool file-name channel)
+      channel)))
 
-(defn- lock-for-file
-  [file-mgr file-name]
-  (nth (:strip-locks file-mgr)
-       (mod (hash file-name) (count (:strip-locks file-mgr)))))
-
-(defn- with-locked-channel
+(defn- with-channel
   [file-mgr file-name index f]
-  (let [^FileChannel channel (open-channel (:channel-pool file-mgr) (:db-dir file-mgr) file-name)
-        lock (lock-for-file file-mgr file-name)
-        offset (block-offset file-mgr index)]
+  (let [db-dir (:db-dir file-mgr)
+        lock (get-lock file-mgr file-name)
+        offset (* index (:block-size file-mgr))
+        ^LinkedHashMap channel-pool (:channel-pool file-mgr)]
     (locking lock
-      (f channel offset))))
+      (f (or (.get channel-pool file-name)
+             (make-channel channel-pool
+                           db-dir
+                           file-name)) offset))))
 
 (defn block-size
   [file-mgr]
@@ -51,12 +51,14 @@
 
 (defn file-size
   [file-mgr file-name]
-  (.length (File. (str (:db-dir file-mgr) "/" file-name))))
+  (let [db-dir (:db-dir file-mgr)
+        pathname (str db-dir "/" file-name)]
+    (.length (File. pathname))))
 
 (defn read
   [file-mgr {:keys [file-name index] :as block-id} ^ByteBuffer page]
   (try
-    (with-locked-channel file-mgr file-name index
+    (with-channel file-mgr file-name index
       (fn [^FileChannel channel offset]
         (let [^ByteBuffer buffer (.rewind page)]
           (.position channel ^long offset)
@@ -67,10 +69,10 @@
                        :offset (* index (:block-size file-mgr))}
                       e)))))
 
-(defn write
+(defn write!
   [file-mgr {:keys [file-name index] :as block-id} ^ByteBuffer page]
   (try
-    (with-locked-channel file-mgr file-name index
+    (with-channel file-mgr file-name index
       (fn [^FileChannel channel offset]
         (let [^ByteBuffer buffer (.rewind page)]
           (.position channel ^long offset)
@@ -81,10 +83,10 @@
                        :offset (* index (:block-size file-mgr))}
                       e)))))
 
-(defn append
+(defn append!
   [file-mgr file-name]
   (try
-    (with-locked-channel file-mgr file-name 0  ; index not used directly
+    (with-channel file-mgr file-name 0
       (fn [^FileChannel channel _]
         (let [index (quot (.size channel) (:block-size file-mgr))
               offset (* index (:block-size file-mgr))
@@ -100,7 +102,7 @@
 (defrecord FileMgr [^String db-dir
                     ^int block-size
                     ^LinkedHashMap channel-pool
-                    ^LinkedHashMap strip-locks])
+                    locks])
 
 (defn make-file-mgr
   ([db-dir block-size]
