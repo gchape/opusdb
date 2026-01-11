@@ -1,10 +1,10 @@
-(ns opusdb.log-mgr-test
+(ns opusdb.logging.log-mgr-test
   (:require
    [clojure.test :refer [deftest is testing use-fixtures]]
-   [opusdb.file-mgr :refer [make-file-mgr]]
-   [opusdb.log-mgr :as lm])
+   [opusdb.io.file-mgr :refer [make-file-mgr]]
+   [opusdb.logging.log-mgr :as lm])
   (:import
-   [opusdb.log_mgr LogMgr]))
+   [opusdb.logging.log_mgr LogMgr]))
 
 (def test-dir "test-log-data")
 (def block-size 400)

@@ -1,4 +1,4 @@
-(ns opusdb.file-mgr
+(ns opusdb.io.file-mgr
   (:refer-clojure :exclude [read])
   (:require
    [opusdb.cache.lru :as lru])

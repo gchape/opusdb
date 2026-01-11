@@ -1,11 +1,11 @@
-(ns opusdb.log-mgr
+(ns opusdb.logging.log-mgr
   (:refer-clojure :exclude [flush])
   (:require
-   [opusdb.file-mgr :as fm]
-   [opusdb.page :as p])
+   [opusdb.io.file-mgr :as fm]
+   [opusdb.memory.page :as p])
   (:import
    [java.nio ByteBuffer]
-   [opusdb.file_mgr FileMgr]))
+   [opusdb.io.file_mgr FileMgr]))
 
 (deftype LogMgr [^FileMgr file-mgr
                  ^String file-name

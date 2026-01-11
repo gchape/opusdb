@@ -1,4 +1,4 @@
-(ns opusdb.page
+(ns opusdb.memory.page
   (:import
    [java.nio ByteBuffer]
    [java.nio.charset Charset StandardCharsets]))

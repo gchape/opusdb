@@ -1,13 +1,13 @@
-(ns opusdb.buffer-mgr
+(ns opusdb.memory.buffer-mgr
   (:refer-clojure :exclude [vals key flush])
   (:require
-   [opusdb.buffer :as buff]
-   [opusdb.cache.splay :as cache])
+   [opusdb.cache.splay :as cache]
+   [opusdb.memory.buffer :as buff])
   (:import
-   [opusdb.buffer Buffer]
    [opusdb.cache.splay Cache]
-   [opusdb.file_mgr FileMgr]
-   [opusdb.log_mgr LogMgr]))
+   [opusdb.io.file_mgr FileMgr]
+   [opusdb.logging.log_mgr LogMgr]
+   [opusdb.memory.buffer Buffer]))
 
 (defn- vals
   [^Cache buffer-pool]

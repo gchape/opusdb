@@ -1,7 +1,7 @@
-(ns opusdb.page-test
+(ns opusdb.memory.page-test
   (:require
    [clojure.test :refer [deftest is testing]]
-   [opusdb.page :as p])
+   [opusdb.memory.page :as p])
   (:import
    [java.nio ByteBuffer]))
 

@@ -1,5 +1,5 @@
 (defproject opusdb "0.1.0-SNAPSHOT"
-  :description "OpusDB: a lightweight, in-memory database written in Clojure for fast, functional data management."
+  :description "OpusDB: a lightweight, in-memory database written in Clojure for functional data."
   :url "https://github.com/gchape/opusdb"
   :license {:name "EPL-2.0"
             :url "https://www.eclipse.org/legal/epl-2.0/"}

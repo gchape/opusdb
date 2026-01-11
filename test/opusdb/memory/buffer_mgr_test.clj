@@ -1,10 +1,10 @@
-(ns opusdb.buffer-mgr-test
+(ns opusdb.memory.buffer-mgr-test
   (:require
    [clojure.test :refer [deftest is testing use-fixtures]]
-   [opusdb.buffer :as b]
-   [opusdb.buffer-mgr :as bm]
-   [opusdb.file-mgr :as fm]
-   [opusdb.log-mgr :as lm])
+   [opusdb.io.file-mgr :as fm]
+   [opusdb.logging.log-mgr :as lm]
+   [opusdb.memory.buffer :as b]
+   [opusdb.memory.buffer-mgr :as bm])
   (:import
    [java.io File]))
 

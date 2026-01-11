@@ -1,13 +1,13 @@
-(ns opusdb.buffer
+(ns opusdb.memory.buffer
   (:refer-clojure :exclude [flush])
   (:require
-   [opusdb.file-mgr :as fm]
-   [opusdb.log-mgr :as lm]
-   [opusdb.page :as p])
+   [opusdb.io.file-mgr :as fm]
+   [opusdb.logging.log-mgr :as lm]
+   [opusdb.memory.page :as p])
   (:import
    [java.nio ByteBuffer]
-   [opusdb.file_mgr FileMgr]
-   [opusdb.log_mgr LogMgr]))
+   [opusdb.io.file_mgr FileMgr]
+   [opusdb.logging.log_mgr LogMgr]))
 
 (defrecord Buffer [^FileMgr file-mgr
                    ^LogMgr log-mgr
