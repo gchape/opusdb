@@ -9,9 +9,8 @@
 
 (defn- make-transaction []
   {:read-point @WRITE_POINT
-   :read-set   (atom {})
-   :write-set  (atom #{})
-   :values     (atom {})})
+   :read-set   (atom {})      ;; {ref -> write-point}
+   :write-set  (atom {})})    ;; {ref -> value}
 
 (defn- retry []
   (throw (ex-info "Transaction aborted" {})))
@@ -21,63 +20,83 @@
 
 (defn- read* [ref]
   (let [tx *current-transaction*
-        values @(:values tx)]
-    (if (contains? values ref)
-      (get values ref)
-      (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
-        (when-not entry
-          (retry))
-        (swap! (:read-set tx) assoc ref (:write-point entry))
-        (swap! (:values tx) assoc ref (:value entry))
-        (:value entry)))))
+        rs @(:read-set tx)
+        ws @(:write-set tx)]
+    ;; read-your-own-writes
+    (if (contains? ws ref)
+      (ws ref)
+      ;; Check if already read
+      (if (contains? rs ref)
+        (:value (first (:history @ref)))  ; Re-read from history
+        ;; First read - find appropriate version
+        (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
+          (when-not entry
+            (retry))
+          ;; Store only write-point for validation
+          (swap! (:read-set tx) assoc ref (:write-point entry))
+          (:value entry))))))
 
 (defn- write* [ref val]
-  (let [tx *current-transaction*]
-    (when-not (contains? @(:write-set tx) ref)
-      (locking (:lock @ref)
-        (swap! (:write-set tx) conj ref)))
-    (swap! (:values tx) assoc ref val)
-    val))
+  (swap! (:write-set *current-transaction*) assoc ref val)
+  val)
 
 (defn- commit []
   (let [tx *current-transaction*
-        read-set  @(:read-set tx)
-        write-set @(:write-set tx)
-        values @(:values tx)]
-    ;; Lock in sorted order (deadlock prevention)
-    (doseq [ref (sort-by hash write-set)]
-      (locking (:lock @ref)
-        ;; Validate reads (only once, not per lock)
-        (when (= ref (first (sort-by hash write-set)))
-          (doseq [[r wp] read-set]
-            (when-not (= (:write-point (first (:history @r))) wp)
-              (retry))))
-        ;; Commit this ref's write
-        (let [wp (swap! WRITE_POINT inc)]
-          (swap! ref
-                 (fn [data]
-                   (assoc data :history
-                          (cons {:value (get values ref)
-                                 :write-point wp}
-                                (butlast (:history data)))))))))))
+        rs @(:read-set tx)
+        ws @(:write-set tx)
+        sorted-refs (sort-by hash (keys ws))]
 
-(defn- run [tx f]
+    (when (empty? sorted-refs)
+      (doseq [[ref wp] rs]
+        (when-not (= (:write-point (first (:history @ref))) wp)
+          (retry))))
+
+    (letfn [(commit* [refs]
+              (if (empty? refs)
+                (do
+                  ;; Validate read-set
+                  (doseq [[ref wp] rs]
+                    (when-not (= (:write-point (first (:history @ref))) wp)
+                      (retry)))
+
+                  ;; Validate write-set (no changes since read-point)
+                  (doseq [ref sorted-refs]
+                    (let [current-wp (:write-point (first (:history @ref)))]
+                      (when (> current-wp (:read-point tx))
+                        (retry))))
+
+                  ;; All validation passed - get write-point and commit
+                  (let [wver (swap! WRITE_POINT inc)]
+                    (doseq [ref sorted-refs]
+                      (swap! ref update :history
+                             #(cons {:value (ws ref)
+                                     :write-point wver}
+                                    (butlast %))))
+                    wver))
+
+                (let [lock (:lock
+                            @(first refs))]
+                  (locking lock
+                    (commit* (rest refs))))))]
+      (commit* sorted-refs))))
+
+(defn- run [tx fun]
   (let [result
         (binding [*current-transaction* tx]
           (try
-            (let [r (f)]
+            (let [r (fun)]
               (commit)
               {:ok r})
             (catch clojure.lang.ExceptionInfo _
               nil)))]
     (if result
       (:ok result)
-      (recur (make-transaction) f))))
+      (recur (make-transaction) fun))))
 
-(defn sync [f]
+(defn sync [fun]
   (if *current-transaction*
-    (f)
-    (run (make-transaction) f)))
+    (fun)
+    (run (make-transaction) fun)))
 
 (defmacro dosync [& body]
   `(sync (fn* [] ~@body)))
@@ -87,14 +106,12 @@
    {:history
     (cons {:value val
            :write-point @WRITE_POINT} HISTORY_TAIL)
-    :lock
-    (Object.)}))
+    :lock (Object.)}))
 
 (defn deref [ref]
   (if *current-transaction*
     (read* ref)
-    (let [ref-data @ref]
-      (:value (first (:history ref-data))))))
+    (:value (first (:history @ref)))))
 
 (defn ref-set [ref val]
   (if *current-transaction*
@@ -102,5 +119,5 @@
     (throw (IllegalStateException.
             "Cannot ref-set outside transaction"))))
 
-(defn alter [ref f & args]
-  (ref-set ref (apply f (deref ref) args)))
+(defn alter [ref fun & args]
+  (ref-set ref (apply fun (deref ref) args)))
