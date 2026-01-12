@@ -9,14 +9,14 @@
 
 (defn- make-transaction []
   {:read-point @WRITE_POINT
-   :read-set   (atom {})      ;; {ref -> write-point}
+   :read-set   (atom {})      ;; {ref -> {:wp write-point :val value}}
    :write-set  (atom {})})    ;; {ref -> value}
 
 (defn- retry []
   (throw (ex-info "Transaction aborted" {})))
 
 (defn- find-before-or-at [read-pt history]
-  (some #(when (<= (:write-point %) read-pt) %) history))
+  (some #(when (<= (:wp %) read-pt) %) history))
 
 (defn- read* [ref]
   (let [tx *current-transaction*
@@ -27,14 +27,15 @@
       (ws ref)
       ;; Check if already read
       (if (contains? rs ref)
-        (:value (first (:history @ref)))  ; Re-read from history
+        (:val (rs ref))  ; return cached value from read-set
         ;; First read - find appropriate version
         (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
           (when-not entry
             (retry))
-          ;; Store only write-point for validation
-          (swap! (:read-set tx) assoc ref (:write-point entry))
-          (:value entry))))))
+          ;; Store both value and write-point for validation
+          (swap! (:read-set tx) assoc ref {:wp (:wp entry)
+                                           :val (:val entry)})
+          (:val entry))))))
 
 (defn- write* [ref val]
   (swap! (:write-set *current-transaction*) assoc ref val)
@@ -46,36 +47,37 @@
         ws @(:write-set tx)
         sorted-refs (sort-by hash (keys ws))]
 
+    ;; If no writes, just validate read-set
     (when (empty? sorted-refs)
-      (doseq [[ref wp] rs]
-        (when-not (= (:write-point (first (:history @ref))) wp)
+      (doseq [[ref {:keys [wp]}] rs]
+        (when-not (= (:wp (first (:history @ref))) wp)
           (retry))))
 
     (letfn [(commit* [refs]
               (if (empty? refs)
                 (do
                   ;; Validate read-set
-                  (doseq [[ref wp] rs]
-                    (when-not (= (:write-point (first (:history @ref))) wp)
+                  (doseq [[ref {:keys [wp]}] rs]
+                    (when-not (= (:wp (first (:history @ref))) wp)
                       (retry)))
 
-                  ;; Validate write-set (no changes since read-point)
+                  ;; Validate write-set
                   (doseq [ref sorted-refs]
-                    (let [current-wp (:write-point (first (:history @ref)))]
+                    (let [current-wp (:wp (first (:history @ref)))]
                       (when (> current-wp (:read-point tx))
                         (retry))))
 
-                  ;; All validation passed - get write-point and commit
+                  ;; All validation passed - assign write-point and commit
                   (let [wver (swap! WRITE_POINT inc)]
                     (doseq [ref sorted-refs]
                       (swap! ref update :history
-                             #(cons {:value (ws ref)
-                                     :write-point wver}
+                             #(cons {:val (ws ref)
+                                     :wp wver}
                                     (butlast %))))
                     wver))
 
-                (let [lock (:lock
-                            @(first refs))]
+                ;; Acquire lock and recurse
+                (let [lock (:lock @(first refs))]
                   (locking lock
                     (commit* (rest refs))))))]
       (commit* sorted-refs))))
@@ -104,14 +106,14 @@
 (defn ref [val]
   (atom
    {:history
-    (cons {:value val
-           :write-point @WRITE_POINT} HISTORY_TAIL)
+    (cons {:val val
+           :wp @WRITE_POINT} HISTORY_TAIL)
     :lock (Object.)}))
 
 (defn deref [ref]
   (if *current-transaction*
     (read* ref)
-    (:value (first (:history @ref)))))
+    (:val (first (:history @ref)))))
 
 (defn ref-set [ref val]
   (if *current-transaction*
