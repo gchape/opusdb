@@ -1,8 +1,6 @@
 (ns opusdb.atomic.stm
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync]))
 
-(def COMMIT_LOCK (Object.))
-
 (def ^:private MAX_HISTORY 8)
 (def ^:private WRITE_POINT (atom 0))
 (def ^:private HISTORY_TAIL (repeat (dec MAX_HISTORY) nil))
@@ -26,7 +24,7 @@
         values @(:values tx)]
     (if (contains? values ref)
       (get values ref)
-      (let [entry (find-before-or-at (:read-point tx) @ref)]
+      (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
         (when-not entry
           (retry))
         (swap! (:read-set tx) assoc ref (:write-point entry))
@@ -35,29 +33,33 @@
 
 (defn- write* [ref val]
   (let [tx *current-transaction*]
-    (swap! (:write-set tx) conj ref)
+    (when-not (contains? @(:write-set tx) ref)
+      (locking (:lock @ref)
+        (swap! (:write-set tx) conj ref)))
     (swap! (:values tx) assoc ref val)
     val))
 
 (defn- commit []
   (let [tx *current-transaction*
         read-set  @(:read-set tx)
-        write-set @(:write-set tx)]
-    (locking COMMIT_LOCK
-      ;; Phase 1: validate reads
-      (doseq [[ref wp] read-set]
-        (when-not (= (:write-point (first @ref)) wp)
-          (retry)))
-      ;; Phase 2: commit writes
-      (when-not (empty? write-set)
-        (let [values @(:values tx)
-              wp (swap! WRITE_POINT inc)]
-          (doseq [ref write-set]
-            (swap! ref
-                   (fn [history]
-                     (cons {:value (get values ref)
-                            :write-point wp}
-                           (butlast history))))))))))
+        write-set @(:write-set tx)
+        values @(:values tx)]
+    ;; Lock in sorted order (deadlock prevention)
+    (doseq [ref (sort-by hash write-set)]
+      (locking (:lock @ref)
+        ;; Validate reads (only once, not per lock)
+        (when (= ref (first (sort-by hash write-set)))
+          (doseq [[r wp] read-set]
+            (when-not (= (:write-point (first (:history @r))) wp)
+              (retry))))
+        ;; Commit this ref's write
+        (let [wp (swap! WRITE_POINT inc)]
+          (swap! ref
+                 (fn [data]
+                   (assoc data :history
+                          (cons {:value (get values ref)
+                                 :write-point wp}
+                                (butlast (:history data)))))))))))
 
 (defn- run [tx f]
   (let [result
@@ -82,14 +84,17 @@
 
 (defn ref [val]
   (atom
-   (cons {:value val
-          :write-point @WRITE_POINT}
-         HISTORY_TAIL)))
+   {:history
+    (cons {:value val
+           :write-point @WRITE_POINT} HISTORY_TAIL)
+    :lock
+    (Object.)}))
 
 (defn deref [ref]
   (if *current-transaction*
     (read* ref)
-    (:value (first @ref))))
+    (let [ref-data @ref]
+      (:value (first (:history ref-data))))))
 
 (defn ref-set [ref val]
   (if *current-transaction*
