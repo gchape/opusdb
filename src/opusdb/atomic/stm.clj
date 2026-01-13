@@ -3,6 +3,7 @@
 
 (def ^:private MAX_HISTORY 8)
 (def ^:private WRITE_POINT (atom 0))
+(def ^:private GLOBAL_LOCK (Object.))
 
 (def ^:dynamic *current-transaction* nil)
 
@@ -40,37 +41,21 @@
 (defn- commit []
   (let [tx *current-transaction*
         rs @(:read-set tx)
-        ws @(:write-set tx)
-        sorted-refs (sort-by hash (keys ws))]
+        ws @(:write-set tx)]
 
-    (when (empty? sorted-refs)
+    (locking GLOBAL_LOCK
       (doseq [[ref {:keys [write-point]}] rs]
         (when-not (= (:write-point (first (:history @ref))) write-point)
-          (retry))))
+          (retry)))
 
-    (letfn [(commit* [refs]
-              (if (seq refs)
-                (let [lock (:lock @(first refs))]
-                  (locking lock
-                    (commit* (rest refs))))
-                (do
-                  (doseq [[ref {:keys [write-point]}] rs]
-                    (when-not (= (:write-point (first (:history @ref))) write-point)
-                      (retry)))
-
-                  (doseq [ref sorted-refs]
-                    (let [write-point (:write-point (first (:history @ref)))]
-                      (when (> write-point (:read-point tx))
-                        (retry))))
-
-                  (let [write-point' (swap! WRITE_POINT inc)]
-                    (doseq [ref sorted-refs]
-                      (swap! ref update :history
-                             #(cons {:value (ws ref)
-                                     :write-point write-point'}
-                                    (butlast %))))
-                    write-point'))))]
-      (commit* sorted-refs))))
+      (when (seq ws)
+        (let [write-point' (swap! WRITE_POINT inc)]
+          (doseq [[ref value] ws]
+            (swap! ref update :history
+                   #(cons {:value value
+                           :write-point write-point'}
+                          (butlast %))))
+          write-point')))))
 
 (defn- run [tx fun]
   (if-let [result (binding [*current-transaction* tx]
@@ -95,8 +80,7 @@
   (atom
    {:history
     (cons {:value val
-           :write-point @WRITE_POINT} (repeat (dec MAX_HISTORY) nil))
-    :lock (Object.)}))
+           :write-point @WRITE_POINT} (repeat (dec MAX_HISTORY) nil))}))
 
 (defn deref [ref]
   (if *current-transaction*

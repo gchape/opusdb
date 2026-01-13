@@ -1,94 +1,87 @@
 (ns opusdb.atomic.stm2
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync]))
 
-(def ^:private MAX_HISTORY 10)
+(def ^:private MAX_HISTORY 8)
 (def ^:private WRITE_POINT (atom 0))
-(def ^:private GLOBAL_LOCK (Object.))
-(def ^:private TRANSACTION_ID (atom 0))
-(def ^:private ACTIVE_TRANSACTIONS (atom {}))
 
-(def ^{:private true :dynamic true} *current-transaction* nil)
+(def ^:dynamic *current-transaction* nil)
 
 (defn- make-transaction []
-  (let [rp @WRITE_POINT
-        tx-id (swap! TRANSACTION_ID inc)
-        tx {:id tx-id
-            :read-point rp
-            :read-set (atom {})
-            :write-set (atom {})
-            :status (atom ::RUNNING)}]
-    (swap! ACTIVE_TRANSACTIONS assoc tx-id tx)
-    tx))
+  {:read-point @WRITE_POINT
+   :read-set   (atom {})
+   :write-set  (atom {})})
 
 (defn- retry []
-  (throw (ex-info "Transaction retry" {:type ::retry})))
+  (throw (ex-info "Transaction aborted" {})))
 
 (defn- find-before-or-at [read-point history]
   (->> history
-       reverse
        (filter some?)
        (filter #(<= (:write-point %) read-point))
        first))
 
-(defn- try-claim-or-steal [ref thief-tx]
-  (locking GLOBAL_LOCK
-    (let [thief-id (:id thief-tx)
-          owner-id (:owner-id @ref)]
-      (cond
-        (or (nil? owner-id) (= owner-id thief-id))
-        (do
-          (swap! ref assoc :owner-id thief-id)
-          true)
+(defn- read* [ref]
+  (let [tx *current-transaction*
+        rs @(:read-set tx)
+        ws @(:write-set tx)]
+    (or (ws ref)
+        (:value (rs ref))
+        (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
+          (when-not entry
+            (retry))
+          (swap! (:read-set tx) assoc ref {:write-point (:write-point entry)
+                                           :value (:value entry)})
+          (:value entry)))))
 
-        (> thief-id owner-id)
-        (do
-          (when-let [owner-tx (get @ACTIVE_TRANSACTIONS owner-id)]
-            (when (= @(:status owner-tx) ::RUNNING)
-              (reset! (:status owner-tx) ::RETRY)))
-          (swap! ref assoc :owner-id thief-id)
-          true)
+(defn- write* [ref val]
+  (swap! (:write-set *current-transaction*) assoc ref val)
+  val)
 
-        :else
-        false))))
+(defn- commit []
+  (let [tx *current-transaction*
+        rs @(:read-set tx)
+        ws @(:write-set tx)
+        sorted-refs (sort-by hash (keys ws))]
 
-(defn- commit [tx]
-  (when (= @(:status tx) ::RETRY)
-    (retry))
+    (when (empty? sorted-refs)
+      (doseq [[ref {:keys [write-point]}] rs]
+        (when-not (= (:write-point (first (:history @ref))) write-point)
+          (retry))))
 
-  (locking GLOBAL_LOCK
-    (when (= @(:status tx) ::RETRY)
-      (retry))
+    (letfn [(commit* [refs]
+              (if (seq refs)
+                (let [lock (:lock @(first refs))]
+                  (locking lock
+                    (commit* (rest refs))))
+                (do
+                  (doseq [[ref {:keys [write-point]}] rs]
+                    (when-not (= (:write-point (first (:history @ref))) write-point)
+                      (retry)))
 
-    (doseq [[ref {:keys [write-point]}] @(:read-set tx)]
-      (when (> (:write-point @ref) write-point)
-        (retry)))
+                  (doseq [ref sorted-refs]
+                    (let [write-point (:write-point (first (:history @ref)))]
+                      (when (> write-point (:read-point tx))
+                        (retry))))
 
-    (let [wp' (swap! WRITE_POINT inc)]
-      (doseq [[ref value] @(:write-set tx)]
-        (swap! ref
-               (fn [ref-state]
-                 (let [history' (conj (subvec (:history ref-state) 1)
-                                      {:value value :write-point wp'})]
-                   (-> ref-state
-                       (assoc :write-point wp')
-                       (assoc :history history')
-                       (dissoc :owner-id))))))
-
-      (reset! (:status tx) ::COMMITTED)
-      (swap! ACTIVE_TRANSACTIONS dissoc (:id tx)))))
+                  (let [write-point' (swap! WRITE_POINT inc)]
+                    (doseq [ref sorted-refs]
+                      (swap! ref update :history
+                             #(cons {:value (ws ref)
+                                     :write-point write-point'}
+                                    (butlast %))))
+                    write-point'))))]
+      (commit* sorted-refs))))
 
 (defn- run [tx fun]
-  (loop [tx' tx]
-    (if-let [result (binding [*current-transaction* tx']
-                      (try
-                        (let [r (fun)]
-                          (commit tx')
-                          {:ok r})
-                        (catch clojure.lang.ExceptionInfo e
-                          (when-not (= (:type (ex-data e)) ::retry)
-                            (throw e)))))]
-      (:ok result)
-      (recur (make-transaction)))))
+  (if-let [result (binding [*current-transaction* tx]
+                    (try
+                      (let [r (fun)]
+                        (commit)
+                        {:ok r})
+                      (catch clojure.lang.ExceptionInfo _
+                        nil)))]
+    (:ok result)
+    (recur (make-transaction) fun)))
 
 (defn sync [fun]
   (if *current-transaction*
@@ -99,41 +92,22 @@
   `(sync (fn* [] ~@body)))
 
 (defn ref [val]
-  (atom {:owner-id nil
-         :write-point @WRITE_POINT
-         :history (conj (vec (repeat (dec MAX_HISTORY) nil))
-                        {:value val :write-point @WRITE_POINT})}))
+  (atom
+   {:history
+    (cons {:value val
+           :write-point @WRITE_POINT} (repeat (dec MAX_HISTORY) nil))
+    :lock (Object.)}))
 
 (defn deref [ref]
-  (if-not *current-transaction*
-    (:value (last (:history @ref)))
-    (let [tx *current-transaction*]
-      (when (= @(:status tx) ::RETRY)
-        (retry))
-      (let [rs @(:read-set tx)
-            ws @(:write-set tx)]
-        (or (ws ref)
-            (:value (rs ref))
-            (let [ref' (find-before-or-at (:read-point tx) (:history @ref))]
-              (when-not ref'
-                (retry))
-              (swap! (:read-set tx) assoc ref {:value (:value ref')
-                                               :write-point (:write-point ref')})
-              (:value ref')))))))
+  (if *current-transaction*
+    (read* ref)
+    (:value (first (:history @ref)))))
 
 (defn ref-set [ref val]
-  (when-not *current-transaction*
-    (throw (IllegalStateException. "ref-set outside transaction")))
-
-  (let [tx *current-transaction*]
-    (when (= @(:status tx) ::RETRY)
-      (retry))
-
-    (when-not (try-claim-or-steal ref tx)
-      (retry))
-
-    (swap! (:write-set tx) assoc ref val)
-    val))
+  (if *current-transaction*
+    (write* ref val)
+    (throw (IllegalStateException.
+            "Cannot ref-set outside transaction"))))
 
 (defn alter [ref fun & args]
   (ref-set ref (apply fun (deref ref) args)))
