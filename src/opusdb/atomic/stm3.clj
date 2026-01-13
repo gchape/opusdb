@@ -23,12 +23,11 @@
   (throw (ex-info "Transaction retry" {:type ::retry})))
 
 (defn- find-before-or-at [read-point history]
-  (loop [history' history]
-    (let [ref' (peek history')]
-      (cond
-        (nil? ref') nil
-        (<= (:write-point ref') read-point) ref'
-        :else (recur (pop history'))))))
+  (->> history
+       reverse
+       (filter some?)
+       (filter #(<= (:write-point %) read-point))
+       first))
 
 (defn- try-claim-or-steal [ref thief-tx]
   (let [lock (:lock @ref)]
@@ -37,7 +36,9 @@
             owner-id (:owner-id @ref)]
         (cond
           (or (nil? owner-id) (= owner-id thief-id))
-          (do (swap! ref assoc :owner-id thief-id) true)
+          (do
+            (swap! ref assoc :owner-id thief-id)
+            true)
 
           (> thief-id owner-id)
           (do
@@ -58,13 +59,16 @@
         ws @(:write-set tx)
         sorted-refs (sort-by hash (keys ws))]
     (letfn [(commit* [refs]
-              (if (empty? refs)
+              (if (seq refs)
+                (let [lock (:lock @(first refs))]
+                  (locking lock
+                    (commit* (rest refs))))
                 (do
                   (when (= @(:status tx) ::RETRY)
                     (retry))
 
-                  (doseq [[ref _] rs]
-                    (when (> (:write-point @ref) (:read-point tx))
+                  (doseq [[ref {:keys [write-point]}] rs]
+                    (when (> (:write-point @ref) write-point)
                       (retry)))
 
                   (let [wp' (swap! WRITE_POINT inc)]
@@ -78,11 +82,7 @@
                                      (assoc :write-point wp')
                                      (assoc :history history')
                                      (dissoc :owner-id))))))
-                    wp'))
-
-                (let [lock (:lock @(first refs))]
-                  (locking lock
-                    (commit* (rest refs))))))]
+                    wp'))))]
       (commit* sorted-refs))
 
     (reset! (:status tx) ::COMMITTED)
@@ -90,19 +90,16 @@
 
 (defn- run [tx fun]
   (loop [tx' tx]
-    (let [result
-          (binding [*current-transaction* tx']
-            (try
-              (let [r (fun)]
-                (commit tx')
-                {:ok r})
-              (catch clojure.lang.ExceptionInfo e
-                (if-not (= (:type (ex-data e)) ::retry)
-                  (throw e)
-                  nil))))]
-      (if result
-        (:ok result)
-        (recur (make-transaction))))))
+    (if-let [result (binding [*current-transaction* tx']
+                      (try
+                        (let [r (fun)]
+                          (commit tx')
+                          {:ok r})
+                        (catch clojure.lang.ExceptionInfo e
+                          (when-not (= (:type (ex-data e)) ::retry)
+                            (throw e)))))]
+      (:ok result)
+      (recur (make-transaction)))))
 
 (defn sync [fun]
   (if *current-transaction*
@@ -120,26 +117,26 @@
          :lock (Object.)}))
 
 (defn deref [ref]
-  (if *current-transaction*
+  (if-not *current-transaction*
+    (:value (last (:history @ref)))
     (let [tx *current-transaction*]
       (when (= @(:status tx) ::RETRY)
         (retry))
       (let [rs @(:read-set tx)
             ws @(:write-set tx)]
-        (cond
-          (contains? ws ref) (get ws ref)
-          (contains? rs ref) (get rs ref)
-          :else
-          (let [ref' (find-before-or-at (:read-point tx) (:history @ref))]
-            (when (nil? ref')
-              (retry))
-            (swap! (:read-set tx) assoc ref (:value ref'))
-            (:value ref')))))
-    (:value (last (:history @ref)))))
+        (or (ws ref)
+            (:value (rs ref))
+            (let [ref' (find-before-or-at (:read-point tx) (:history @ref))]
+              (when-not ref'
+                (retry))
+              (swap! (:read-set tx) assoc ref {:value (:value ref')
+                                               :write-point (:write-point ref')})
+              (:value ref')))))))
 
 (defn ref-set [ref val]
   (when-not *current-transaction*
     (throw (IllegalStateException. "ref-set outside transaction")))
+
   (let [tx *current-transaction*]
     (when (= @(:status tx) ::RETRY)
       (retry))

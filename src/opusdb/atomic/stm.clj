@@ -14,27 +14,24 @@
 (defn- retry []
   (throw (ex-info "Transaction aborted" {})))
 
-(defn- find-before-or-at [read-pt history]
-  (some #(when (<= (:write-point %) read-pt) %) history))
+(defn- find-before-or-at [read-point history]
+  (->> history
+       (filter some?)
+       (filter #(<= (:write-point %) read-point))
+       first))
 
 (defn- read* [ref]
   (let [tx *current-transaction*
         rs @(:read-set tx)
         ws @(:write-set tx)]
-    (cond
-      (contains? ws ref)
-      (ws ref)
-
-      (contains? rs ref)
-      (:value (rs ref))
-
-      :else
-      (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
-        (when-not entry
-          (retry))
-        (swap! (:read-set tx) assoc ref {:write-point (:write-point entry)
-                                         :value (:value entry)})
-        (:value entry)))))
+    (or (ws ref)
+        (:value (rs ref))
+        (let [entry (find-before-or-at (:read-point tx) (:history @ref))]
+          (when-not entry
+            (retry))
+          (swap! (:read-set tx) assoc ref {:write-point (:write-point entry)
+                                           :value (:value entry)})
+          (:value entry)))))
 
 (defn- write* [ref val]
   (swap! (:write-set *current-transaction*) assoc ref val)
@@ -52,7 +49,10 @@
           (retry))))
 
     (letfn [(commit* [refs]
-              (if (empty? refs)
+              (if (seq refs)
+                (let [lock (:lock @(first refs))]
+                  (locking lock
+                    (commit* (rest refs))))
                 (do
                   (doseq [[ref {:keys [write-point]}] rs]
                     (when-not (= (:write-point (first (:history @ref))) write-point)
@@ -69,25 +69,19 @@
                              #(cons {:value (ws ref)
                                      :write-point write-point'}
                                     (butlast %))))
-                    write-point'))
-
-                (let [lock (:lock @(first refs))]
-                  (locking lock
-                    (commit* (rest refs))))))]
+                    write-point'))))]
       (commit* sorted-refs))))
 
 (defn- run [tx fun]
-  (let [result
-        (binding [*current-transaction* tx]
-          (try
-            (let [r (fun)]
-              (commit)
-              {:ok r})
-            (catch clojure.lang.ExceptionInfo _
-              nil)))]
-    (if result
-      (:ok result)
-      (recur (make-transaction) fun))))
+  (if-let [result (binding [*current-transaction* tx]
+                    (try
+                      (let [r (fun)]
+                        (commit)
+                        {:ok r})
+                      (catch clojure.lang.ExceptionInfo _
+                        nil)))]
+    (:ok result)
+    (recur (make-transaction) fun)))
 
 (defn sync [fun]
   (if *current-transaction*
