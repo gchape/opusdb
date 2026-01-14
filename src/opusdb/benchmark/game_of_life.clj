@@ -1,14 +1,14 @@
 (ns opusdb.benchmark.game-of-life
   (:require
    [criterium.core :as crit]
-   [opusdb.atomic.stm :as stm4]))
+   [opusdb.atomic.stm :as stm]))
 
 (defn make-grid
   "Create a size x size grid of STM refs (0 = dead, 1 = alive)."
   [size]
   (vec (for [_ (range size)]
          (vec (for [_ (range size)]
-                (stm4/ref (rand-int 2)))))))
+                (stm/ref (rand-int 2)))))))
 
 (defn neighbors
   "Return coordinates of neighbors for cell (i,j) in a grid of given size."
@@ -24,7 +24,7 @@
   [grid i j]
   (let [size (count grid)]
     (reduce + (for [[ni nj] (neighbors i j size)]
-                (stm4/deref ((grid ni) nj))))))
+                (stm/deref ((grid ni) nj))))))
 
 (defn next-state
   "Compute next state of a cell based on current value and live neighbors."
@@ -44,10 +44,10 @@
       (let [thread (Thread.
                     (fn []
                       (doseq [[i j] chunk]
-                        (stm4/dosync
-                         (let [current (stm4/deref ((grid i) j))
+                        (stm/dosync
+                         (let [current (stm/deref ((grid i) j))
                                live    (live-neighbors grid i j)]
-                           (stm4/ref-set ((grid i) j) (next-state current live)))))))]
+                           (stm/ref-set ((grid i) j) (next-state current live)))))))]
         (.start thread)
         (.join thread)))))
 
@@ -57,6 +57,6 @@
   (let [grid (make-grid size)]
     (dotimes [_ num-steps]
       (step grid num-threads))
-    (mapv (fn [row] (mapv stm4/deref row)) grid)))
+    (mapv (fn [row] (mapv stm/deref row)) grid)))
 
 (crit/quick-bench (run 100 25 10))
