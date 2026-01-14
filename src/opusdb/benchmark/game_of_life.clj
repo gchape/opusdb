@@ -1,7 +1,7 @@
 (ns opusdb.benchmark.game-of-life
   (:require
    [criterium.core :as crit]
-   [opusdb.atomic.stm4 :as stm4]))
+   [opusdb.atomic.stm :as stm4]))
 
 (defn make-grid
   "Create a size x size grid of STM refs (0 = dead, 1 = alive)."
