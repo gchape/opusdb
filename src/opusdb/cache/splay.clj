@@ -1,7 +1,7 @@
 (ns opusdb.cache.splay
   (:refer-clojure :exclude [get type remove vals]))
 
-(defrecord Cache [tree size type eviction-fn count])
+(defrecord Cache [tree max-size type eviction-fn size])
 
 (defn- rotate-right [{left :left :as node}]
   (if left (assoc left :right (assoc node :left (:right left))) node))
@@ -69,14 +69,14 @@
         (neg? cmp) (recur (:left node) key)
         :else (recur (:right node) key)))))
 
-(defn put! [{:keys [tree size type eviction-fn count]} k v]
+(defn put! [{:keys [tree max-size type eviction-fn size]} k v]
   (let [root @tree
         existing? (contains-key? root k)
-        full? (and (>= @count size) (not existing?))]
+        full? (and (>= @size max-size) (not existing?))]
     (when full?
       (let [victim (if (= type "LRU") (leftmost-node root) root)]
         (when eviction-fn (eviction-fn (:key victim) (:value victim)))))
-    (when-not existing? (swap! count inc))
+    (when-not existing? (swap! size inc))
     (reset! tree (splay (insert (if full? (remove root type) root) k v) k))))
 
 (defn get [{:keys [tree]} k]
@@ -96,5 +96,5 @@
     (vec (walk @tree))))
 
 (defn make-cache
-  ([size eviction-fn] (make-cache size eviction-fn "LRU"))
-  ([size eviction-fn cache-type] (->Cache (atom nil) size cache-type eviction-fn (atom 0))))
+  ([max-size eviction-fn] (make-cache max-size eviction-fn "LRU"))
+  ([max-size eviction-fn cache-type] (->Cache (atom nil) max-size cache-type eviction-fn (atom 0))))

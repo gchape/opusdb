@@ -6,13 +6,13 @@
 (deftest test-make-cache
   (testing "Creating cache with default LRU type"
     (let [c (cache/make-cache 3 nil)]
-      (is (= 3 (:size c)))
+      (is (= 3 (:max-size c)))
       (is (= "LRU" (:type c)))
       (is (nil? @(:tree c)))))
 
   (testing "Creating cache with explicit MRU type"
     (let [c (cache/make-cache 5 nil "MRU")]
-      (is (= 5 (:size c)))
+      (is (= 5 (:max-size c)))
       (is (= "MRU" (:type c))))))
 
 (deftest test-put-and-get

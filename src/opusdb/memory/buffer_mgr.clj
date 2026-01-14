@@ -54,20 +54,21 @@
 (defn pin-buffer! [^BufferMgr buffer-mgr block-id]
   (locking buffer-mgr
     (let [^Cache pool (:buffer-pool buffer-mgr)
-          state (:state buffer-mgr)
           key (key block-id)
-          start-time (System/currentTimeMillis)
-          timeout (:timeout buffer-mgr)]
+          state (:state buffer-mgr)
+          timeout (:timeout buffer-mgr)
+          start-time (System/currentTimeMillis)]
       (try
         (loop []
           (if-let [^Buffer buff
                    (or (find-existing-buffer pool block-id)
+
                        (when-let [^Buffer free (find-unpinned-buffer pool)]
                          (buff/assign-to-block! free block-id)
                          (cache/put! pool key free)
                          free)
-                       ;; Lazy
-                       (when (< @(:count pool) (:size pool))
+
+                       (when (< @(:size pool) (:max-size pool))
                          (let [new-buff (buff/make-buffer (:file-mgr buffer-mgr)
                                                           (:log-mgr buffer-mgr))]
                            (buff/assign-to-block! new-buff block-id)
