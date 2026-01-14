@@ -24,10 +24,10 @@
   (throw (ex-info "Transaction retry" {:type ::retry})))
 
 (defn- find-before-or-at [read-point history]
-  (->> history
-       reverse
-       (filter some?)
-       (filter #(<= (:write-point %) read-point))
+  (->> (eduction
+        (filter some?)
+        (filter #(<= (:write-point %) read-point))
+        (rseq history))
        first))
 
 (defn- try-claim-or-steal [ref thief-tx]

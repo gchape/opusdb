@@ -16,9 +16,10 @@
   (throw (ex-info "Transaction aborted" {})))
 
 (defn- find-before-or-at [read-point history]
-  (->> history
-       (filter some?)
-       (filter #(<= (:write-point %) read-point))
+  (->> (eduction
+        (filter some?)
+        (filter #(<= (:write-point %) read-point))
+        history)
        first))
 
 (defn- read* [ref]
