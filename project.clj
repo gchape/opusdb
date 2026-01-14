@@ -6,5 +6,13 @@
   :dependencies [[org.clojure/clojure "1.12.4"]]
   :main opusdb.main.core
   :target-path "target/%s"
-  :profiles {:uberjar {:aot :all
+  :profiles {:dev {:dependencies [[criterium "0.4.6"]]
+                   :jvm-opts ["-XX:+UnlockDiagnosticVMOptions"
+                              "-XX:+DebugNonSafepoints"]}
+             :prod {:aot :all
+                    :jvm-opts ["-Dclojure.compiler.direct-linking=true"
+                               "-XX:+UseG1GC"
+                               "-XX:MaxGCPauseMillis=200"
+                               "-server"]}
+             :uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}})
