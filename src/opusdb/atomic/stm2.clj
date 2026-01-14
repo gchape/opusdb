@@ -3,6 +3,7 @@
 
 (def ^:private MAX_HISTORY 8)
 (def ^:private WRITE_POINT (atom 0))
+(def ^:private INIT_HISTORY (into [] (repeat (dec MAX_HISTORY) nil)))
 
 (def ^:dynamic *current-transaction* nil)
 
@@ -15,11 +16,9 @@
   (throw (ex-info "Transaction aborted" {})))
 
 (defn- find-before-or-at [read-point history]
-  (->> (eduction
-        (filter some?)
-        (filter #(<= (:write-point %) read-point))
-        history)
-       first))
+  (->> (rseq history)
+       (filterv #(and % (<= (:write-point %) read-point)))
+       (first)))
 
 (defn- read* [ref]
   (let [tx *current-transaction*
@@ -46,7 +45,7 @@
 
     (when (empty? sorted-refs)
       (doseq [[ref {:keys [write-point]}] rs]
-        (when-not (= (:write-point (first (:history @ref))) write-point)
+        (when-not (= (:write-point (last (:history @ref))) write-point)
           (retry))))
 
     (letfn [(commit* [refs]
@@ -56,20 +55,19 @@
                     (commit* (rest refs))))
                 (do
                   (doseq [[ref {:keys [write-point]}] rs]
-                    (when-not (= (:write-point (first (:history @ref))) write-point)
+                    (when-not (= (:write-point (last (:history @ref))) write-point)
                       (retry)))
 
                   (doseq [ref sorted-refs]
-                    (let [write-point (:write-point (first (:history @ref)))]
+                    (let [write-point (:write-point (last (:history @ref)))]
                       (when (> write-point (:read-point tx))
                         (retry))))
 
                   (let [write-point' (swap! WRITE_POINT inc)]
                     (doseq [ref sorted-refs]
                       (swap! ref update :history
-                             #(cons {:value (ws ref)
-                                     :write-point write-point'}
-                                    (butlast %))))
+                             #(conj (subvec % 1) {:value (ws ref)
+                                                  :write-point write-point'})))
                     write-point'))))]
       (commit* sorted-refs))))
 
@@ -95,14 +93,14 @@
 (defn ref [val]
   (atom
    {:history
-    (cons {:value val
-           :write-point @WRITE_POINT} (repeat (dec MAX_HISTORY) nil))
+    (conj INIT_HISTORY
+          {:value val :write-point @WRITE_POINT})
     :lock (Object.)}))
 
 (defn deref [ref]
   (if *current-transaction*
     (read* ref)
-    (:value (first (:history @ref)))))
+    (:value (last (:history @ref)))))
 
 (defn ref-set [ref val]
   (if *current-transaction*

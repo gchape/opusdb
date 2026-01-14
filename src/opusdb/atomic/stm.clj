@@ -4,6 +4,7 @@
 (def ^:private MAX_HISTORY 8)
 (def ^:private WRITE_POINT (atom 0))
 (def ^:private GLOBAL_LOCK (Object.))
+(def ^:private INIT_HISTORY (into [] (repeat (dec MAX_HISTORY) nil)))
 
 (def ^:dynamic *current-transaction* nil)
 
@@ -16,11 +17,9 @@
   (throw (ex-info "Transaction aborted" {})))
 
 (defn- find-before-or-at [read-point history]
-  (->> (eduction
-        (filter some?)
-        (filter #(<= (:write-point %) read-point))
-        history)
-       first))
+  (->> (rseq history)
+       (filterv #(and % (<= (:write-point %) read-point)))
+       (first)))
 
 (defn- read* [ref]
   (let [tx *current-transaction*
@@ -46,16 +45,15 @@
 
     (locking GLOBAL_LOCK
       (doseq [[ref {:keys [write-point]}] rs]
-        (when-not (= (:write-point (first (:history @ref))) write-point)
+        (when-not (= (:write-point (last (:history @ref))) write-point)
           (retry)))
 
       (when (seq ws)
         (let [write-point' (swap! WRITE_POINT inc)]
           (doseq [[ref value] ws]
             (swap! ref update :history
-                   #(cons {:value value
-                           :write-point write-point'}
-                          (butlast %))))
+                   #(conj (subvec % 1) {:value value
+                                        :write-point write-point'})))
           write-point')))))
 
 (defn- run [tx fun]
@@ -80,13 +78,13 @@
 (defn ref [val]
   (atom
    {:history
-    (cons {:value val
-           :write-point @WRITE_POINT} (repeat (dec MAX_HISTORY) nil))}))
+    (conj INIT_HISTORY
+          {:value val :write-point @WRITE_POINT})}))
 
 (defn deref [ref]
   (if *current-transaction*
     (read* ref)
-    (:value (first (:history @ref)))))
+    (:value (last (:history @ref)))))
 
 (defn ref-set [ref val]
   (if *current-transaction*

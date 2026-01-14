@@ -5,6 +5,7 @@
 (def ^:private WRITE_POINT (atom 0))
 (def ^:private TRANSACTION_ID (atom 0))
 (def ^:private ACTIVE_TRANSACTIONS (atom {}))
+(def ^:private INIT_HISTORY (into [] (repeat (dec MAX_HISTORY) nil)))
 
 (def ^{:private true :dynamic true} *current-transaction* nil)
 
@@ -23,11 +24,9 @@
   (throw (ex-info "Transaction retry" {:type ::retry})))
 
 (defn- find-before-or-at [read-point history]
-  (->> (eduction
-        (filter some?)
-        (filter #(<= (:write-point %) read-point))
-        (rseq history))
-       first))
+  (->> (rseq history)
+       (filterv #(and % (<= (:write-point %) read-point)))
+       (first)))
 
 (defn- try-claim-or-steal [ref thief-tx]
   (let [lock (:lock @ref)]
@@ -112,7 +111,7 @@
 (defn ref [val]
   (atom {:owner-id nil
          :write-point @WRITE_POINT
-         :history (conj (vec (repeat (dec MAX_HISTORY) nil))
+         :history (conj INIT_HISTORY
                         {:value val :write-point @WRITE_POINT})
          :lock (Object.)}))
 
