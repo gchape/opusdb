@@ -1,7 +1,7 @@
 (ns opusdb.atomic.stm3
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync]))
 
-(def ^:private MAX_HISTORY 10)
+(def ^:private MAX_HISTORY 64)
 (def ^:private WRITE_POINT (atom 0))
 (def ^:private GLOBAL_LOCK (Object.))
 (def ^:private TRANSACTION_ID (atom 0))

@@ -1,11 +1,11 @@
 (ns opusdb.atomic.stm2
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync]))
 
-(def ^:private MAX_HISTORY 8)
+(def ^:private MAX_HISTORY 64)
 (def ^:private WRITE_POINT (atom 0))
 (def ^:private INIT_HISTORY (into [] (repeat (dec MAX_HISTORY) nil)))
 
-(def ^:dynamic *current-transaction* nil)
+(def ^{:private true :dynamic true} *current-transaction* nil)
 
 (defn- make-transaction []
   {:read-point @WRITE_POINT

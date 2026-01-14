@@ -1,7 +1,7 @@
 (ns opusdb.atomic.stm4
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync]))
 
-(def ^:private MAX_HISTORY 10)
+(def ^:private MAX_HISTORY 100000)
 (def ^:private WRITE_POINT (atom 0))
 (def ^:private TRANSACTION_ID (atom 0))
 (def ^:private ACTIVE_TRANSACTIONS (atom {}))
@@ -75,8 +75,7 @@
                       (swap! ref
                              (fn [ref-state]
                                (let [history' (conj (subvec (:history ref-state) 1)
-                                                    {:value value
-                                                     :write-point wp'})]
+                                                    {:value value :write-point wp'})]
                                  (-> ref-state
                                      (assoc :write-point wp')
                                      (assoc :history history')
