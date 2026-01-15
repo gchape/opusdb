@@ -40,19 +40,18 @@
 
     (let [total-balance (reduce + (map stm/deref (:accounts bank)))
           transfers (stm/deref (:transfers bank))]
-      (println "Total balance (should be" (* n-accounts 1000) "):" total-balance)
-      (println "Successful transfers:" transfers)
-      (println "Transactions/sec:" (/ transfers (/ duration-ms 1000.0)))))
+      (println "Total (should be" (* n-accounts 1000) "):" total-balance)
+      (println "Successful transfers:" transfers)))
 
   (println "\nBenchmarking single transfer transaction:")
   (let [bank (make-bank 10 1000)]
-    (crit/quick-bench
+    (crit/bench
      (transfer bank 0 1 10)))
 
   (println "\nBenchmarking concurrent transfers:")
   (println "(10 concurrent transfer operations)")
   (let [bank (make-bank 10 1000)]
-    (crit/quick-bench
+    (crit/bench
      (let [futures (doall
                     (for [i (range 10)]
                       (future
@@ -65,7 +64,7 @@
   (println "\nBenchmarking high-contention scenario:")
   (println "(20 threads all transferring from/to same 2 accounts)")
   (let [bank (make-bank 10 1000)]
-    (crit/quick-bench
+    (crit/bench
      (let [futures (doall
                     (for [_ (range 20)]
                       (future
