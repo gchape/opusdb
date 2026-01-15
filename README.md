@@ -67,3 +67,62 @@ Twenty threads simultaneously attempt to transfer 1 unit from account 0 to accou
 - Single STM transactions complete in ~4 µs.
 - The system sustains over 330k successful transfers in 5 seconds under randomized concurrent load.
 - Performance degrades predictably under worst-case contention, with no pathological retry behavior observed.
+
+## Santa Claus Problem Benchmark
+
+The system models:
+
+* **9 reindeer**, all of which must return before a toy delivery
+* **10 elves**, requesting help in groups of **3**
+* **Reindeer have priority** over elves
+
+All coordination is implemented using atomic STM transactions without explicit locking.
+
+### Test Scenario
+
+**10-second concurrent simulation**
+
+* 9 reindeer threads repeatedly return from vacation
+* 10 elf threads repeatedly request help
+* Reindeer sleep for 100–300 ms between returns
+* Elves sleep for 50–150 ms between requests
+
+Santa’s actions emerge from transactional rules:
+
+* A delivery occurs only when all reindeer are present
+* Elf meetings occur only when at least three elves are waiting
+* Elf meetings are blocked while a reindeer delivery is pending
+
+### Correctness Guarantees
+
+* Deliveries occur only when all 9 reindeer are present
+* Elves are helped strictly in groups of three
+* Reindeer deliveries are never interrupted by elf meetings
+* No deadlock or livelock
+* Both elves and reindeer make progress (no starvation)
+
+### Results
+
+```
+Toy deliveries:         41
+Elf meetings:           334
+Reindeer still waiting: 2
+Elves still waiting:    1
+```
+
+Remaining waiters are expected due to abrupt simulation termination.
+
+### Concurrent Transaction Benchmark
+
+Measures the cost of executing all Santa-related transactions concurrently.
+
+* 19 concurrent transactions (9 reindeer + 10 elves)
+* Shared STM state with read/write contention
+* Measured using Criterium
+
+```
+Execution time mean : 3.599055 ms
+Execution time std-deviation : 221.537723 µs
+```
+
+This indicates bounded retries and predictable performance under contention.
