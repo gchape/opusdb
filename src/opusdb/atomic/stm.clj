@@ -3,23 +3,23 @@
   (:import
    [java.util.concurrent ConcurrentHashMap]))
 
-(def ^:private TX_ID (atom 0))
 (def ^:private MAX_HISTORY 128)
 (def ^:private WRITE_POINT (atom 0))
-(def ^:private ACTIVE_TXS (ConcurrentHashMap.))
+(def ^:private TRANSACTION_ID (atom 0))
+(def ^:private ACTIVE_TRANSACTIONS (ConcurrentHashMap.))
 
-(def ^{:private true :dynamic true} *current-tx* nil)
+(def ^{:private true :dynamic true} *current-transaction* nil)
 
 (defn- make-tx []
   (let [read-point @WRITE_POINT
-        tx-id (swap! TX_ID inc)
+        tx-id (swap! TRANSACTION_ID inc)
         tx {:id tx-id
             :retries (atom 0)
             :read-set (atom {})
             :write-set (atom {})
             :read-point read-point
             :status (volatile! ::RUNNING)}]
-    (.put ACTIVE_TXS tx-id tx)
+    (.put ACTIVE_TRANSACTIONS tx-id tx)
     tx))
 
 (defn- retry []
@@ -52,7 +52,7 @@
 
           (> thief owner)
           (do
-            (when-let [owner-tx (.get ACTIVE_TXS owner)]
+            (when-let [owner-tx (.get ACTIVE_TRANSACTIONS owner)]
               (when (= @(:status owner-tx) ::RUNNING)
                 (vreset! (:status owner-tx) ::RETRY)))
             (swap! ref assoc :owner thief)
@@ -80,45 +80,45 @@
                     (when (> (:write-point @ref) write-point)
                       (retry)))
 
-                  (let [wp' (swap! WRITE_POINT inc)]
+                  (let [write-point' (swap! WRITE_POINT inc)]
                     (doseq [[ref val] ws]
                       (swap! ref
                              (fn [state]
-                               (let [h (conj (:history state) {:value val :write-point wp'})
+                               (let [h (conj (:history state) {:value val :write-point write-point'})
                                      h' (if (> (count h) MAX_HISTORY)
                                           (subvec h 1)
                                           h)]
                                  (-> state
-                                     (assoc :write-point wp')
+                                     (dissoc :owner)
                                      (assoc :history h')
-                                     (dissoc :owner))))))
-                    wp'))))]
+                                     (assoc :write-point write-point'))))))
+                    write-point'))))]
       (commit* (sort-by hash (keys ws))))
 
     (vreset! (:status tx) ::COMMITTED)
-    (.remove ACTIVE_TXS (:id tx))))
+    (.remove ACTIVE_TRANSACTIONS (:id tx))))
 
 (defn- run [tx fun]
-  (loop [tx tx]
-    (if-let [result (binding [*current-tx* tx]
+  (loop [tx' tx]
+    (if-let [result (binding [*current-transaction* tx']
                       (try
                         (let [r (fun)]
-                          (commit tx)
+                          (commit tx')
                           {:ok r})
                         (catch clojure.lang.ExceptionInfo e
                           (if (= (:type (ex-data e)) ::retry)
                             (do
-                              (swap! (:retries tx) inc)
+                              (swap! (:retries tx') inc)
                               nil)
                             (do
-                              (.remove ACTIVE_TXS (:id tx))
+                              (.remove ACTIVE_TRANSACTIONS (:id tx'))
                               (throw e))))
                         (catch Throwable t
-                          (.remove ACTIVE_TXS (:id tx))
+                          (.remove ACTIVE_TRANSACTIONS (:id tx'))
                           (throw t))))]
       (:ok result)
-      (let [n @(:retries tx)
-            base (bit-shift-left 1 (min n 6))
+      (let [r @(:retries tx')
+            base (bit-shift-left 1 (min r 6))
             limit (min 64 base)
             ms (rand-int (inc limit))]
         (when (pos? ms)
@@ -126,7 +126,7 @@
         (recur (make-tx))))))
 
 (defn sync [fun]
-  (if *current-tx*
+  (if *current-transaction*
     (fun)
     (run (make-tx) fun)))
 
@@ -140,29 +140,29 @@
            :history [{:value val :write-point wp}]
            :lock (Object.)})))
 
-(defn deref [r]
-  (if-not *current-tx*
-    (:value (last (:history @r)))
-    (let [tx *current-tx*]
+(defn deref [ref]
+  (if-not *current-transaction*
+    (:value (last (:history @ref)))
+    (let [tx *current-transaction*]
       (when (= @(:status tx) ::RETRY)
         (retry))
       (let [reads @(:read-set tx)
             writes @(:write-set tx)]
-        (or (writes r)
-            (:value (reads r))
-            (let [entry (find-at-or-before (:read-point tx) (:history @r))]
+        (or (writes ref)
+            (:value (reads ref))
+            (let [entry (find-at-or-before (:read-point tx) (:history @ref))]
               (when-not entry
                 (retry))
 
-              (swap! (:read-set tx) assoc r {:value (:value entry)
-                                             :write-point (:write-point entry)})
+              (swap! (:read-set tx) assoc ref {:value (:value entry)
+                                               :write-point (:write-point entry)})
               (:value entry)))))))
 
 (defn ref-set [ref val]
-  (when-not *current-tx*
+  (when-not *current-transaction*
     (throw (IllegalStateException. "ref-set outside transaction")))
 
-  (let [tx *current-tx*]
+  (let [tx *current-transaction*]
     (when (= @(:status tx) ::RETRY)
       (retry))
 

@@ -27,43 +27,43 @@ Ten futures execute simultaneous transfers in a ring pattern: thread i transfers
 Twenty threads simultaneously attempt to transfer 1 unit from account 0 to account 1. This creates a pathological case where all transactions conflict on the same two refs. Performance here depends entirely on the conflict resolution mechanism—specifically how efficiently the retry logic and backoff strategy handle serialized access to heavily contested resources.
 
 ### Results
+```
+Evaluating file: bank_tran.clj
 
-; Evaluating file: bank_tran.clj
-; 
-; === BANK TRANSFERS ===
-; Total (should be 10000 ): 10000
-; Successful transfers: 331432
-; 
-; Benchmarking single transfer transaction:
-; Evaluation count : 154200 in 6 samples of 25700 calls.
-;              Execution time mean : 4.224818 µs
-;     Execution time std-deviation : 284.678826 ns
-;    Execution time lower quantile : 3.966891 µs ( 2.5%)
-;    Execution time upper quantile : 4.542472 µs (97.5%)
-;                    Overhead used : 2.432259 ns
-; 
-; Benchmarking concurrent transfers:
-; (10 concurrent transfer operations)
-; Evaluation count : 180 in 6 samples of 30 calls.
-;              Execution time mean : 3.659315 ms
-;     Execution time std-deviation : 212.438316 µs
-;    Execution time lower quantile : 3.468588 ms ( 2.5%)
-;    Execution time upper quantile : 3.992595 ms (97.5%)
-;                    Overhead used : 2.432259 ns
-; 
-; Found 1 outliers in 6 samples (16.6667 %)
-; 	low-severe	 1 (16.6667 %)
-;  Variance from outliers : 14.5203 % Variance is moderately inflated by outliers
-; 
-; Benchmarking high-contention scenario:
-; (20 threads all transferring from/to same 2 accounts)
-; Evaluation count : 9246 in 6 samples of 1541 calls.
-;              Execution time mean : 78.742568 µs
-;     Execution time std-deviation : 4.561345 µs
-;    Execution time lower quantile : 73.106659 µs ( 2.5%)
-;    Execution time upper quantile : 84.362971 µs (97.5%)
-;                    Overhead used : 2.432259 ns
+=== BANK TRANSFERS ===
+Total (should be 10000 ): 10000
+Successful transfers: 331432
 
+Benchmarking single transfer transaction:
+Evaluation count : 154200 in 6 samples of 25700 calls.
+             Execution time mean : 4.224818 µs
+    Execution time std-deviation : 284.678826 ns
+   Execution time lower quantile : 3.966891 µs ( 2.5%)
+   Execution time upper quantile : 4.542472 µs (97.5%)
+                   Overhead used : 2.432259 ns
+
+Benchmarking concurrent transfers:
+(10 concurrent transfer operations)
+Evaluation count : 180 in 6 samples of 30 calls.
+             Execution time mean : 3.659315 ms
+    Execution time std-deviation : 212.438316 µs
+   Execution time lower quantile : 3.468588 ms ( 2.5%)
+   Execution time upper quantile : 3.992595 ms (97.5%)
+                   Overhead used : 2.432259 ns
+
+Found 1 outliers in 6 samples (16.6667 %)
+	low-severe	 1 (16.6667 %)
+ Variance from outliers : 14.5203 % Variance is moderately inflated by outliers
+
+Benchmarking high-contention scenario:
+(20 threads all transferring from/to same 2 accounts)
+Evaluation count : 9246 in 6 samples of 1541 calls.
+             Execution time mean : 78.742568 µs
+    Execution time std-deviation : 4.561345 µs
+   Execution time lower quantile : 73.106659 µs ( 2.5%)
+   Execution time upper quantile : 84.362971 µs (97.5%)
+                   Overhead used : 2.432259 ns
+```
 - Single STM transactions complete in ~4 µs.
 - The system sustains over 330k successful transfers in 5 seconds under randomized concurrent load.
 - Performance degrades predictably under worst-case contention, with no pathological retry behavior observed.
