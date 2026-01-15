@@ -6,56 +6,56 @@
 (def ^:private TX_ID (atom 0))
 (def ^:private MAX_HISTORY 128)
 (def ^:private WRITE_POINT (atom 0))
-(def ^:private ACTIVE_TX_MAP (ConcurrentHashMap.))
+(def ^:private ACTIVE_TXS (ConcurrentHashMap.))
 
 (def ^{:private true :dynamic true} *current-tx* nil)
 
 (defn- make-tx []
-  (let [rp @WRITE_POINT
-        id (swap! TX_ID inc)
-        tx {:id id
-            :read-point rp
+  (let [read-point @WRITE_POINT
+        tx-id (swap! TX_ID inc)
+        tx {:id tx-id
             :retries (atom 0)
             :read-set (atom {})
             :write-set (atom {})
+            :read-point read-point
             :status (volatile! ::RUNNING)}]
-    (.put ACTIVE_TX_MAP id tx)
+    (.put ACTIVE_TXS tx-id tx)
     tx))
 
 (defn- retry []
   (throw (ex-info "Transaction retry" {:type ::retry})))
 
-(defn- find-at-or-before [rp history]
+(defn- find-at-or-before [read-point history]
   (loop [lo 0
          hi (dec (count history))
          result nil]
     (if (<= lo hi)
       (let [mid (quot (+ lo hi) 2)
             entry (nth history mid)
-            wp (:write-point entry)]
+            write-point (:write-point entry)]
         (cond
-          (= wp rp) entry
-          (< wp rp) (recur (inc mid) hi entry)
+          (= write-point read-point) entry
+          (< write-point read-point) (recur (inc mid) hi entry)
           :else (recur lo (dec mid) result)))
       result)))
 
-(defn- claim-or-steal [r tx]
-  (let [lock (:lock @r)]
+(defn- try-claim-or-steal [ref tx]
+  (let [lock (:lock @ref)]
     (locking lock
       (let [thief (:id tx)
-            owner (:owner @r)]
+            owner (:owner @ref)]
         (cond
           (or (nil? owner) (= owner thief))
           (do
-            (swap! r assoc :owner thief)
+            (swap! ref assoc :owner thief)
             true)
 
           (> thief owner)
           (do
-            (when-let [owner-tx (.get ACTIVE_TX_MAP owner)]
+            (when-let [owner-tx (.get ACTIVE_TXS owner)]
               (when (= @(:status owner-tx) ::RUNNING)
                 (vreset! (:status owner-tx) ::RETRY)))
-            (swap! r assoc :owner thief)
+            (swap! ref assoc :owner thief)
             true)
 
           :else
@@ -66,8 +66,7 @@
     (retry))
 
   (let [rs @(:read-set tx)
-        ws @(:write-set tx)
-        sorted-refs (sort-by hash (keys ws))]
+        ws @(:write-set tx)]
     (letfn [(commit* [refs]
               (if (seq refs)
                 (let [lock (:lock @(first refs))]
@@ -94,16 +93,16 @@
                                      (assoc :history h')
                                      (dissoc :owner))))))
                     wp'))))]
-      (commit* sorted-refs))
+      (commit* (sort-by hash (keys ws))))
 
     (vreset! (:status tx) ::COMMITTED)
-    (.remove ACTIVE_TX_MAP (:id tx))))
+    (.remove ACTIVE_TXS (:id tx))))
 
-(defn- run [tx f]
+(defn- run [tx fun]
   (loop [tx tx]
     (if-let [result (binding [*current-tx* tx]
                       (try
-                        (let [r (f)]
+                        (let [r (fun)]
                           (commit tx)
                           {:ok r})
                         (catch clojure.lang.ExceptionInfo e
@@ -112,22 +111,24 @@
                               (swap! (:retries tx) inc)
                               nil)
                             (do
-                              (.remove ACTIVE_TX_MAP (:id tx))
+                              (.remove ACTIVE_TXS (:id tx))
                               (throw e))))
                         (catch Throwable t
-                          (.remove ACTIVE_TX_MAP (:id tx))
+                          (.remove ACTIVE_TXS (:id tx))
                           (throw t))))]
       (:ok result)
       (let [n @(:retries tx)
-            ms (min 50 (bit-shift-left 1 (min n 5)))]
+            base (bit-shift-left 1 (min n 6))
+            limit (min 64 base)
+            ms (rand-int (inc limit))]
         (when (pos? ms)
           (Thread/sleep ms))
         (recur (make-tx))))))
 
-(defn sync [f]
+(defn sync [fun]
   (if *current-tx*
-    (f)
-    (run (make-tx) f)))
+    (fun)
+    (run (make-tx) fun)))
 
 (defmacro dosync [& body]
   `(sync (fn* [] ~@body)))
@@ -152,21 +153,24 @@
             (let [entry (find-at-or-before (:read-point tx) (:history @r))]
               (when-not entry
                 (retry))
+
               (swap! (:read-set tx) assoc r {:value (:value entry)
                                              :write-point (:write-point entry)})
               (:value entry)))))))
 
-(defn ref-set [r val]
+(defn ref-set [ref val]
   (when-not *current-tx*
     (throw (IllegalStateException. "ref-set outside transaction")))
 
   (let [tx *current-tx*]
     (when (= @(:status tx) ::RETRY)
       (retry))
-    (when-not (claim-or-steal r tx)
+
+    (when-not (try-claim-or-steal ref tx)
       (retry))
-    (swap! (:write-set tx) assoc r val)
+
+    (swap! (:write-set tx) assoc ref val)
     val))
 
-(defn alter [r f & args]
-  (ref-set r (apply f (deref r) args)))
+(defn alter [ref fun & args]
+  (ref-set ref (apply fun (deref ref) args)))
