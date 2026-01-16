@@ -1,4 +1,4 @@
-(ns opusdb.benchmark.bank-tran
+(ns opusdb.benchmark.bank
   (:require
    [criterium.core :as crit]
    [opusdb.atomic.stm :as stm]))

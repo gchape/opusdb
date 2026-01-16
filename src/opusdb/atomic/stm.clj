@@ -1,6 +1,7 @@
 (ns opusdb.atomic.stm
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync])
   (:import
+   [java.util HashMap]
    [java.util.concurrent ConcurrentHashMap]
    [java.util.concurrent.atomic AtomicLong]))
 
@@ -15,8 +16,8 @@
   (let [read-point (.get WRITE_POINT)
         tx-id (.incrementAndGet TRANSACTION_ID)
         tx {:id tx-id
-            :read-set (atom {})
-            :write-set (atom {})
+            :read-set (HashMap.)
+            :write-set (HashMap.)
             :read-point read-point
             :retry-count (volatile! 0)
             :status (volatile! ::RUNNING)}]
@@ -67,8 +68,8 @@
   (when (= @(:status tx) ::RETRY)
     (retry))
 
-  (let [rs @(:read-set tx)
-        ws @(:write-set tx)]
+  (let [^HashMap rs (:read-set tx)
+        ^HashMap ws (:write-set tx)]
     (letfn [(commit* [refs]
               (if (seq refs)
                 (let [lock (:lock @(first refs))]
@@ -78,8 +79,8 @@
                   (when (= @(:status tx) ::RETRY)
                     (retry))
 
-                  (doseq [[ref {:keys [write-point]}] rs]
-                    (when (> (:write-point @ref) write-point)
+                  (doseq [[ref entry] rs]
+                    (when (> (:write-point @ref) (:write-point entry))
                       (retry)))
 
                   (let [write-point' (.incrementAndGet WRITE_POINT)]
@@ -143,16 +144,16 @@
     (let [tx *current-transaction*]
       (when (= @(:status tx) ::RETRY)
         (retry))
-      (let [rs @(:read-set tx)
-            ws @(:write-set tx)]
-        (or (ws ref)
-            (:value (rs ref))
+      (let [^HashMap rs (:read-set tx)
+            ^HashMap ws (:write-set tx)]
+        (or (.get ws ref)
+            (when-let [cached (.get rs ref)]
+              (:value cached))
             (let [entry (find-at-or-before (:read-point tx) (:history @ref))]
               (when-not entry
                 (retry))
-
-              (swap! (:read-set tx) assoc ref {:value (:value entry)
-                                               :write-point (:write-point entry)})
+              (.put rs ref {:value (:value entry)
+                            :write-point (:write-point entry)})
               (:value entry)))))))
 
 (defn ref-set [ref val]
@@ -166,7 +167,7 @@
     (when-not (try-claim-or-steal ref tx)
       (retry))
 
-    (swap! (:write-set tx) assoc ref val)
+    (.put ^HashMap (:write-set tx) ref val)
     val))
 
 (defn alter [ref fun & args]
