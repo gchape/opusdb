@@ -6,6 +6,7 @@
    [java.util.concurrent.atomic AtomicInteger AtomicLong]))
 
 (def ^:private MAX_HISTORY 16)
+(def ^:private COMMIT_LOCK (Object.))
 (def ^:private ^AtomicLong WRITE_POINT (AtomicLong.))
 (def ^:private ^AtomicLong TRANSACTION_ID (AtomicLong.))
 (def ^:private ^ConcurrentHashMap ACTIVE_TRANSACTIONS (ConcurrentHashMap.))
@@ -27,7 +28,28 @@
 (defn- retry []
   (throw (ex-info "Transaction retry" {:type ::retry})))
 
-(defn- find-at-or-before [read-point history]
+(defn- abort-if-retrying [tx]
+  (when (= @(:status tx) ::RETRY)
+    (retry)))
+
+(defn- ensure-read-consistency [read-set]
+  (doseq [[ref entry] read-set]
+    (when (> (:write-point @ref) (:write-point entry))
+      (retry))))
+
+(defn- apply-writes! [write-set]
+  (let [wp (.incrementAndGet WRITE_POINT)]
+    (doseq [[ref val] write-set]
+      (swap! ref
+             (fn [{:keys [history] :as state}]
+               (let [h' (->> (conj history {:value val :write-point wp})
+                             (take-last MAX_HISTORY)
+                             vec)]
+                 (merge state {:history h'
+                               :write-point wp
+                               :owner nil})))))))
+
+(defn- find-version [read-point history]
   (loop [lo 0
          hi (dec (count history))
          result nil]
@@ -46,7 +68,7 @@
           (recur lo (dec mid) result)))
       result)))
 
-(defn- try-claim-or-steal [ref tx]
+(defn- acquire-ownership [ref tx]
   (let [lock (:lock @ref)]
     (monitor-enter lock)
     (try
@@ -65,39 +87,16 @@
         (monitor-exit lock)))))
 
 (defn- commit [tx]
-  (when (= @(:status tx) ::RETRY)
-    (retry))
+  (abort-if-retrying tx)
 
   (let [^HashMap rs (:read-set tx)
         ^HashMap ws (:write-set tx)]
-    (letfn [(commit* [refs]
-              (if (seq refs)
-                (let [lock (:lock @(first refs))]
-                  (locking lock
-                    (commit* (rest refs))))
-                (do
-                  (when (= @(:status tx) ::RETRY)
-                    (retry))
+    (when (seq ws)
+      (locking COMMIT_LOCK
+        (abort-if-retrying tx)
+        (ensure-read-consistency rs)
 
-                  (doseq [[ref entry] rs]
-                    (when (> (:write-point @ref) (:write-point entry))
-                      (retry)))
-
-                  (let [write-point' (.incrementAndGet WRITE_POINT)]
-                    (doseq [[ref val] ws]
-                      (swap! ref
-                             (fn [state]
-                               (let [h (conj (:history state) {:value val
-                                                               :write-point write-point'})
-                                     h' (if (> (count h) MAX_HISTORY)
-                                          (subvec h 1)
-                                          h)]
-                                 (-> state
-                                     (dissoc :owner)
-                                     (assoc :history h')
-                                     (assoc :write-point write-point'))))))
-                    write-point'))))]
-      (commit* (sort-by hash (keys rs))))
+        (apply-writes! ws)))
 
     (vreset! (:status tx) ::COMMITTED)
     (.remove ACTIVE_TRANSACTIONS (:id tx))))
@@ -132,26 +131,28 @@
   `(sync (fn* [] ~@body)))
 
 (defn ref [val]
-  (let [write-point (.get WRITE_POINT)]
+  (let [wp (.get WRITE_POINT)]
     (atom {:owner nil
-           :write-point write-point
-           :history [{:value val :write-point write-point}]
+           :write-point wp
+           :history [{:value val :write-point wp}]
            :lock (Object.)})))
 
 (defn deref [ref]
   (if-not *current-transaction*
     (:value (last (:history @ref)))
     (let [tx *current-transaction*]
-      (when (= @(:status tx) ::RETRY)
-        (retry))
+      (abort-if-retrying tx)
+
       (let [^HashMap rs (:read-set tx)
             ^HashMap ws (:write-set tx)]
         (or (.get ws ref)
             (when-let [cached (.get rs ref)]
               (:value cached))
-            (let [entry (find-at-or-before (:read-point tx) (:history @ref))]
+
+            (let [entry (find-version (:read-point tx) (:history @ref))]
               (when-not entry
                 (retry))
+
               (.put rs ref {:value (:value entry)
                             :write-point (:write-point entry)})
               (:value entry)))))))
@@ -161,10 +162,9 @@
     (throw (IllegalStateException. "ref-set outside transaction")))
 
   (let [tx *current-transaction*]
-    (when (= @(:status tx) ::RETRY)
-      (retry))
+    (abort-if-retrying tx)
 
-    (when-not (try-claim-or-steal ref tx)
+    (when-not (acquire-ownership ref tx)
       (retry))
 
     (.put ^HashMap (:write-set tx) ref val)
