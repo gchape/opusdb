@@ -3,7 +3,7 @@
   (:import
    [java.util HashMap]
    [java.util.concurrent ConcurrentHashMap]
-   [java.util.concurrent.atomic AtomicLong]))
+   [java.util.concurrent.atomic AtomicInteger AtomicLong]))
 
 (def ^:private MAX_HISTORY 16)
 (def ^:private ^AtomicLong WRITE_POINT (AtomicLong.))
@@ -19,7 +19,7 @@
             :read-set (HashMap.)
             :write-set (HashMap.)
             :read-point read-point
-            :retry-count (volatile! 0)
+            :retry-count (AtomicInteger.)
             :status (volatile! ::RUNNING)}]
     (.put ACTIVE_TRANSACTIONS tx-id tx)
     tx))
@@ -114,13 +114,13 @@
                             (do
                               (.remove ACTIVE_TRANSACTIONS (:id tx))
                               (throw e))
-                            (let [n @(:retry-count tx)]
+                            (let [n (.get (:retry-count tx))]
                               (when (pos? n)
                                 (Thread/sleep (bit-shift-left 1 (min n 5))))
                               nil)))))]
       (:ok result)
       (let [tx' (make-transaction)]
-        (vreset! (:retry-count tx') (inc @(:retry-count tx)))
+        (.set (:retry-count tx') (.incrementAndGet (:retry-count tx)))
         (recur tx')))))
 
 (defn sync [fun]
