@@ -1,4 +1,4 @@
-(ns opusdb.atomic.txcb
+(ns opusdb.atomic.lifecycle.events
   (:import
    [java.util.concurrent ConcurrentHashMap]))
 

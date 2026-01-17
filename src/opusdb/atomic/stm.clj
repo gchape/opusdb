@@ -1,7 +1,7 @@
 (ns opusdb.atomic.stm
   (:refer-clojure :exclude [ref deref ref-set alter dosync sync])
   (:require
-   [opusdb.atomic.txcb :as txcb])
+   [opusdb.atomic.lifecycle.events :as events])
   (:import
    [java.util Collections HashMap]
    [java.util.concurrent ConcurrentHashMap]
@@ -23,15 +23,15 @@
             :write-set (HashMap.)
             :read-point read-point
             :retry-count (AtomicInteger.)
-            :status (volatile! ::RUNNING)}]
+            :status (volatile! ::ACTIVE)}]
     (.put ACTIVE_TRANSACTIONS tx-id tx)
     tx))
 
 (defn- retry []
-  (throw (ex-info "Transaction retry" {:type ::retry})))
+  (throw (ex-info "Transaction retry" {:type ::ABORTED})))
 
-(defn- abort-if-retrying [tx]
-  (when (= @(:status tx) ::RETRY)
+(defn- retry-if-aborted [tx]
+  (when (= @(:status tx) ::ABORTED)
     (retry)))
 
 (defn- ensure-read-consistency [read-set]
@@ -53,16 +53,16 @@
                                :owner nil})))))))
 
 (defn- find-version [read-point history]
-  (let [i (Collections/binarySearch history
-                                    {:write-point read-point}
-                                    #(compare
-                                      (:write-point %1)
-                                      (:write-point %2)))]
-    (if (>= i 0)
-      (history i)
-      (let [i (- (inc i))]
-        (when (> i 0)
-          (history (dec i)))))))
+  (let [index (Collections/binarySearch history
+                                        {:write-point read-point}
+                                        #(compare
+                                          (:write-point %1)
+                                          (:write-point %2)))]
+    (if (>= index 0)
+      (history index)
+      (let [index' (- (inc index))]
+        (when (> index' 0)
+          (history (dec index')))))))
 
 (defn- acquire-ownership [ref tx]
   (let [lock (:lock @ref)]
@@ -74,8 +74,8 @@
           (do
             (when (and owner (> thief owner))
               (when-some [owner-tx (.get ACTIVE_TRANSACTIONS owner)]
-                (when (= @(:status owner-tx) ::RUNNING)
-                  (vreset! (:status owner-tx) ::RETRY))))
+                (when (= @(:status owner-tx) ::ACTIVE)
+                  (vreset! (:status owner-tx) ::ABORTED))))
             (swap! ref assoc :owner thief)
             true)
           false))
@@ -89,7 +89,7 @@
 
     (:retry result)
     (do
-      (txcb/rollback! (:id tx))
+      (events/rollback! (:id tx))
 
       (let [n (.get ^AtomicInteger (:retry-count tx))]
         (when (pos? n)
@@ -102,24 +102,24 @@
 
     (:abort result)
     (do
-      (txcb/rollback! (:id tx))
+      (events/rollback! (:id tx))
       (throw (:abort result)))))
 
 (defn- commit [tx]
-  (abort-if-retrying tx)
+  (retry-if-aborted tx)
 
   (let [^HashMap rs (:read-set tx)
         ^HashMap ws (:write-set tx)]
     (when (seq ws)
       (locking COMMIT_LOCK
-        (abort-if-retrying tx)
+        (retry-if-aborted tx)
         (ensure-read-consistency rs)
 
         (apply-writes! ws)))
 
     (vreset! (:status tx) ::COMMITTED)
     (.remove ACTIVE_TRANSACTIONS (:id tx))
-    (txcb/commit! (:id tx))))
+    (events/commit! (:id tx))))
 
 (defn- run [tx fun]
   (loop [tx tx]
@@ -131,7 +131,7 @@
                           r)})
 
                  (catch clojure.lang.ExceptionInfo e
-                   (if (= (:type (ex-data e)) ::retry)
+                   (if (= (:type (ex-data e)) ::ABORTED)
                      {:retry true}
                      (throw e)))
 
@@ -161,7 +161,7 @@
   (if-not *current-transaction*
     (:value (last (:history @ref)))
     (let [tx *current-transaction*]
-      (abort-if-retrying tx)
+      (retry-if-aborted tx)
 
       (let [^HashMap rs (:read-set tx)
             ^HashMap ws (:write-set tx)]
@@ -182,7 +182,7 @@
     (throw (IllegalStateException. "ref-set outside transaction")))
 
   (let [tx *current-transaction*]
-    (abort-if-retrying tx)
+    (retry-if-aborted tx)
 
     (when-not (acquire-ownership ref tx)
       (retry))
@@ -196,11 +196,11 @@
 (defn on-rollback [fun]
   (let [tx *current-transaction*]
     (if tx
-      (txcb/on-rollback (:id tx) fun)
+      (events/on-rollback (:id tx) fun)
       (throw (IllegalStateException. "on-rollback outside transaction")))))
 
 (defn on-commit [fun]
   (let [tx *current-transaction*]
     (if tx
-      (txcb/on-commit (:id tx) fun)
+      (events/on-commit (:id tx) fun)
       (throw (IllegalStateException. "on-commit outside transaction")))))
