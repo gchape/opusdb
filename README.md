@@ -2,39 +2,21 @@
 
 ## Bank Transfer Benchmark
 
-The bank consists of 10 accounts, each initialized with 1000 units. Transfers are implemented as atomic transactions that:
-- Read source and destination balances
-- Verify sufficient funds
-- Update both accounts and increment a transfer counter
-- Abort if funds are insufficient
-
-The STM guarantees that either all operations complete or none do, preventing partial transfers or lost updates.
+The bank consists of 10 accounts, each initialized with 1000 units. Transfers are atomic transactions that read balances, verify funds, update both accounts, and increment a counter. The STM guarantees all-or-nothing execution, preventing partial transfers or lost updates.
 
 ### Test Scenarios
 
-**Throughput measurement (5 second stress test)**
+**Throughput measurement (5 second stress test)** - Twenty threads execute concurrent transfers for 5 seconds. Verifies total remains exactly 10,000 units.
 
-Twenty threads execute transfers concurrently for 5 seconds. Each thread randomly selects two different accounts and transfers a random amount between 1-50 units. After completion, the benchmark verifies that the total across all accounts remains exactly 10,000 units—any deviation indicates a violation of transactional consistency. The number of successful transfers indicates overall system throughput.
+**Single transaction latency** - Baseline cost of a single transfer using Criterium's statistical sampling.
 
-**Single transaction latency**
+**Low-contention concurrent transfers** - Rotating through different account pairs (minimal conflicts).
 
-Measures the baseline cost of a single transfer operation (account 0 to account 1, transferring 10 units) using Criterium's statistical sampling. This establishes the fundamental transaction overhead without any concurrency.
+**Medium-contention scenario** - All transfers constrained to accounts 0-4 (moderate resource contention).
 
-**Low-contention concurrent transfers**
+**High-contention scenario** - All transactions between accounts 0 and 1 (maximum read-write conflicts).
 
-Measures transaction latency when rotating through different account pairs in sequence. Each transfer moves from account i to account (i+1) mod 10, creating minimal conflict between transactions. This tests baseline concurrent performance when transactions rarely compete for the same resources.
-
-**Medium-contention scenario**
-
-All transfers constrained to accounts 0-4, creating moderate resource contention. Multiple threads compete for access to the same subset of accounts, forcing the STM to serialize some operations while allowing others to proceed in parallel.
-
-**High-contention scenario**
-
-All transactions attempt to transfer between the same two accounts (0 and 1). This creates maximum read-write conflicts where every transaction competes directly with every other transaction. Performance depends entirely on the conflict resolution mechanism and retry strategy.
-
-**Extreme-contention with futures**
-
-Twenty futures simultaneously attempt to transfer 1 unit from account 0 to account 1. This pathological case combines maximum STM contention with thread coordination overhead, testing both the transaction retry logic and the system's ability to handle heavily serialized access.
+**Extreme-contention with futures** - Twenty futures simultaneously transferring from account 0 to 1.
 
 ### Results
 ```
@@ -95,61 +77,36 @@ Evaluation count : 12756 in 6 samples of 2126 calls.
                    Overhead used : 2.312308 ns
 ```
 
-- Single STM transactions complete in ~1.17 µs
-- The system sustains over **1,052k successful transfers in 5 seconds** (210k transfers/sec) with 20 concurrent threads
-- High-contention performance matches single-threaded baseline (~1.18 µs)
-- Low/medium-contention scenarios show consistent ~4.9 µs latency
-- Extreme-contention scenario (20 futures) shows bounded overhead at ~51 µs
-- Transactional consistency maintained across all scenarios (total balance = 10,000)
-
-**Performance Highlights:**
-- **82% throughput improvement** over previous implementation (1,052k vs 578k transfers)
-- Consistent sub-microsecond latency for single transactions
-- Excellent scaling under low/medium contention
-- Predictable performance degradation under extreme contention
-- Zero data inconsistencies across all test scenarios
+**Key Results:**
+- Single transactions: ~1.17 µs
+- **1,052k successful transfers in 5 seconds** (210k transfers/sec, 20 concurrent threads)
+- **82% throughput improvement** over previous implementation (1,052k vs 578k)
+- High-contention matches single-threaded baseline (~1.18 µs)
+- Low/medium-contention: consistent ~4.9 µs latency
+- Extreme-contention: bounded overhead at ~51 µs
+- Zero data inconsistencies (total balance = 10,000)
 
 ## Throughput Benchmark
 
-Comprehensive performance testing of the STM implementation across various workload patterns, measuring transaction throughput, latency, and scalability under different contention levels.
+Comprehensive STM performance testing across various workload patterns.
 
 ### Test Scenarios
 
-**1. Simple Increments (Single-threaded)**
+**1. Simple Increments** - Single-threaded baseline with no concurrency.
 
-Baseline measurement of transaction overhead with no concurrency. Each transaction increments 10 refs sequentially, establishing the fundamental cost of read-write transactions without any contention.
+**2. High Contention** - Multiple threads competing for a single shared ref.
 
-**2. High Contention**
+**3. Low Contention** - Each thread operates on isolated refs with no overlap.
 
-Multiple threads competing for a single shared ref. All threads repeatedly increment the same counter, forcing the STM to serialize all operations. This tests the efficiency of the conflict resolution mechanism and retry strategy under maximum contention.
+**4. Read-Heavy Mix (10% writes)** - Simulates read-dominated workloads.
 
-**3. Low Contention**
+**5. Balanced Mix (50% writes)** - Equal distribution of read and write operations.
 
-Each thread operates on its own isolated ref with no overlap. This measures the STM's ability to parallelize truly independent transactions and represents the ideal case for concurrent performance.
+**6. Write-Heavy Mix (90% writes)** - Write-dominated workload with frequent conflicts.
 
-**4. Read-Heavy Mix (10% writes)**
+**7. Bank Transfer** - Real-world financial transactions with abort conditions.
 
-Simulates read-dominated workloads typical of caching layers or monitoring systems. Threads randomly select between incrementing a random ref (10%) or reading the sum of all refs (90%). Tests performance when most transactions can proceed without conflicts.
-
-**5. Balanced Mix (50% writes)**
-
-Equal distribution of read and write operations. Threads alternate between incrementing random refs and reading sums. Represents typical OLTP workloads with mixed access patterns.
-
-**6. Write-Heavy Mix (90% writes)**
-
-Write-dominated workload where 90% of operations modify state. Tests STM performance under sustained write pressure with frequent conflicts.
-
-**7. Bank Transfer (Realistic Workload)**
-
-Models real-world financial transactions. Each thread attempts to transfer random amounts between random accounts, with transactions aborting if insufficient funds exist. Measures both successful transaction throughput and data consistency under realistic conditions.
-
-**8. Criterium Statistical Benchmarks**
-
-Precise latency measurements using statistical sampling:
-- Single increment operation
-- Single ref-set operation
-- Read-only transactions with varying ref counts
-- Multi-ref write transactions
+**8. Criterium Statistical Benchmarks** - Precise latency measurements using statistical sampling.
 
 ### Results
 ```
@@ -237,39 +194,12 @@ Write transaction (5 refs):
              Execution time mean : 4.816849 µs
     Execution time std-deviation : 475.326904 ns
 ```
+### Performance Summary
 
-### Performance Analysis
+**Latency:** Single ref-set: 1.21 µs | Single increment: 1.74 µs | 5-ref read: 1.72 µs | 10-ref read: 2.57 µs | 5-ref write: 4.82 µs
 
-**Latency Characteristics:**
-- Single ref-set: 1.21 µs (minimal transaction overhead)
-- Single increment: 1.74 µs (read-modify-write)
-- 5-ref read: 1.72 µs (efficient snapshot reads)
-- 10-ref read: 2.57 µs (~0.26 µs per ref)
-- 5-ref write: 4.82 µs (efficient multi-ref updates)
+**Scalability:** Low contention: 519k-676k TPS | High contention: 157k-198k TPS | Bank transfers: 75k-109k TPS
 
-**Scalability:**
-- Low contention: Excellent scaling with 519k-676k TPS across thread counts
-- High contention: Maintains 157k-198k TPS even when all threads compete for single ref
-- Bank transfers: Achieves 75k-109k TPS with complex multi-ref transactions
+**Consistency:** 100% correctness across all scenarios, zero lost updates or inconsistent states
 
-**Contention Handling:**
-- High-contention peak at 4 threads (198k TPS), stabilizing around 157-174k at higher thread counts
-- Global commit lock provides predictable performance under contention
-- Exponential backoff ensures bounded overhead under sustained contention
-
-**Write Performance:**
-- Write-heavy workloads (90% writes) achieve 205k-222k ops/sec
-- Read-heavy workloads (10% writes) achieve 353k-377k ops/sec
-- Demonstrates efficient commit protocol and minimal locking overhead
-
-**Data Consistency:**
-- 100% correctness across all scenarios (all :correct? true)
-- Bank transfers maintain exact balance despite thousands of concurrent operations
-- Zero lost updates, phantom reads, or inconsistent states observed
-
-### Key Improvements
-
-- **82% improvement** in bank transfer throughput (1,052k vs 578k successful transfers)
-- Maintained sub-microsecond single-transaction latency
-- Improved code organization without sacrificing performance
-- Consistent behavior across all contention scenarios
+**Key Improvements:** 82% throughput increase in bank transfers (1,052k vs 578k), maintained sub-microsecond latency, consistent behavior across all contention levels
