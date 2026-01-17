@@ -1,3 +1,5 @@
+![svgviewer-output (1)](https://github.com/user-attachments/assets/efa7100c-3b9f-42c0-8d0d-1b4234e79fea)
+
 ## Bank Transfer Benchmark
 
 The bank consists of 10 accounts, each initialized with 1000 units. Transfers are implemented as atomic transactions that:
