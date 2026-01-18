@@ -1,10 +1,34 @@
+# OpusDB
+
+A lightweight, in-memory database written in Clojure for functional data.
+
 ![svgviewer-output (1)](https://github.com/user-attachments/assets/efa7100c-3b9f-42c0-8d0d-1b4234e79fea)
 
-## Bank Transfer Benchmark
+## Table of Contents
+
+- [Features](#features)
+- [Benchmarks](#benchmarks)
+  - [Bank Transfer Benchmarks](#bank-transfer-benchmarks)
+  - [Throughput Benchmarks](#throughput-benchmarks)
+- [API Reference](#api-reference)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Benchmarks
+
+OpusDB provides comprehensive performance benchmarks demonstrating STM capabilities under various workload patterns.
+
+### Bank Transfer Benchmarks
+
+Real-world financial transaction simulation testing atomicity and consistency under concurrent load.
+
+#### Test Configuration
 
 The bank consists of 10 accounts, each initialized with 1000 units. Transfers are atomic transactions that read balances, verify funds, update both accounts, and increment a counter. The STM guarantees all-or-nothing execution, preventing partial transfers or lost updates.
 
-### Test Scenarios
+#### Bank Transfer Test Scenarios
 
 **Throughput measurement (5 second stress test)** - Twenty threads execute concurrent transfers for 5 seconds. Verifies total remains exactly 10,000 units.
 
@@ -18,8 +42,11 @@ The bank consists of 10 accounts, each initialized with 1000 units. Transfers ar
 
 **Extreme-contention with futures** - Twenty futures simultaneously transferring from account 0 to 1.
 
-### Results
-```
+#### Bank Transfer Results
+
+```plain
+
+```plain
 === BANK TRANSFERS ===
 Total (should be 10000): 10000
 Successful transfers: 1052939
@@ -33,7 +60,7 @@ Evaluation count : 651438 in 6 samples of 108573 calls.
                    Overhead used : 2.312308 ns
 
 Found 1 outliers in 6 samples (16.6667 %)
-	low-severe	 1 (16.6667 %)
+ low-severe 1 (16.6667 %)
  Variance from outliers : 81.7978 % Variance is severely inflated by outliers
 
 Benchmarking low-contention concurrent transfers:
@@ -64,7 +91,7 @@ Evaluation count : 654108 in 6 samples of 109018 calls.
                    Overhead used : 2.312308 ns
 
 Found 1 outliers in 6 samples (16.6667 %)
-	low-severe	 1 (16.6667 %)
+ low-severe 1 (16.6667 %)
  Variance from outliers : 81.6285 % Variance is severely inflated by outliers
 
 Benchmarking extreme-contention with futures:
@@ -78,19 +105,21 @@ Evaluation count : 12756 in 6 samples of 2126 calls.
 ```
 
 **Key Results:**
+
 - Single transactions: ~1.17 µs
 - **1,052k successful transfers in 5 seconds** (210k transfers/sec, 20 concurrent threads)
 - **82% throughput improvement** over previous implementation (1,052k vs 578k)
-- High-contention matches single-threaded baseline (~1.18 µs)
+- High-contention matches single-threaded ba## Throughput Results#
+seline (~1.18 µs)
 - Low/medium-contention: consistent ~4.9 µs latency
 - Extreme-contention: bounded overhead at ~51 µs
 - Zero data inconsistencies (total balance = 10,000)
 
-## Throughput Benchmark
+### Throughput Benchmarks
 
 Comprehensive STM performance testing across various workload patterns.
 
-### Test Scenarios
+#### Throughput Test Scenarios
 
 **1. Simple Increments** - Single-threaded baseline with no concurrency.
 
@@ -108,8 +137,9 @@ Comprehensive STM performance testing across various workload patterns.
 
 **8. Criterium Statistical Benchmarks** - Precise latency measurements using statistical sampling.
 
-### Results
-```
+#### Throughput Results
+
+```plain
 === Throughput Benchmarks ===
 
 1. Simple Increments (single-threaded, 10 refs):
@@ -194,12 +224,31 @@ Write transaction (5 refs):
              Execution time mean : 4.816849 µs
     Execution time std-deviation : 475.326904 ns
 ```
-### Performance Summary
 
-**Latency:** Single ref-set: 1.21 µs | Single increment: 1.74 µs | 5-ref read: 1.72 µs | 10-ref read: 2.57 µs | 5-ref write: 4.82 µs
+#### Performance Summary
 
-**Scalability:** Low contention: 519k-676k TPS | High contention: 157k-198k TPS | Bank transfers: 75k-109k TPS
+**Latency:**
+
+- Single ref-set: 1.21 µs
+- Single increment: 1.74 µs
+- 5-ref read: 1.72 µs
+- 10-ref read: 2.57 µs
+- 5-ref write: 4.82 µs
+
+**Scalability:**
+
+- Low contention: 519k-676k TPS
+- High contention: 157k-198k TPS
+- Bank transfers: 75k-109k TPS
 
 **Consistency:** 100% correctness across all scenarios, zero lost updates or inconsistent states
 
 **Key Improvements:** 82% throughput increase in bank transfers (1,052k vs 578k), maintained sub-microsecond latency, consistent behavior across all contention levels
+
+## License
+
+Copyright © 2025 OpusDB Contributors
+
+This program and the accompanying materials are made available under the
+terms of the Eclipse Public License 2.0 which is available at
+<http://www.eclipse.org/legal/epl-2.0>.
