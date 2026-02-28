@@ -1,6 +1,6 @@
 # OpusDB
 
-A lightweight, in-memory database written in Clojure for functional data.
+An Experimental Relational Database for Academic Research in Clojure.
 
 ![svgviewer-output (1)](https://github.com/user-attachments/assets/efa7100c-3b9f-42c0-8d0d-1b4234e79fea)
 
