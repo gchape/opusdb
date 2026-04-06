@@ -2,7 +2,7 @@
 
 An Experimental Relational Database for Academic Research in Clojure.
 
-![svgviewer-output (1)](https://github.com/user-attachments/assets/efa7100c-3b9f-42c0-8d0d-1b4234e79fea)
+<img width="463" height="927" alt="logo" src="https://github.com/user-attachments/assets/ba51138f-7354-4ffd-bb7c-4a53847ca7a1" />
 
 ## Table of Contents
 
