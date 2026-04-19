@@ -1,268 +1,209 @@
 (ns opusdb.benchmark.throughput
   (:require
    [criterium.core :as crit]
-   [opusdb.atomic.stm :as stm]))
+   [opusdb.atomic.stm :as stm])
+  (:import
+   [java.util.concurrent CountDownLatch]))
 
-(defn benchmark-simple-increments
-  "Measures throughput of simple counter increments"
-  [n-refs n-txns]
-  (let [refs (vec (repeatedly n-refs #(stm/ref 0)))
-        start (System/nanoTime)]
-    (dotimes [_ n-txns]
-      (stm/dosync
-       (doseq [r refs]
-         (stm/alter r inc))))
-    (let [elapsed-ms (/ (- (System/nanoTime) start) 1e6)
-          txns-per-sec (/ n-txns (/ elapsed-ms 1000))
-          final-values (mapv stm/deref refs)
-          expected n-txns
-          correct? (every? #(= % expected) final-values)]
-      {:txns n-txns
-       :refs n-refs
-       :elapsed-ms (format "%.2f" elapsed-ms)
-       :txns-per-sec (format "%.0f" txns-per-sec)
-       :correct? correct?})))
+(defmacro ^:private timed [& body]
+  `(let [start# (System/nanoTime)
+         result# (do ~@body)]
+     [result# (/ (- (System/nanoTime) start#) 1e6)]))
 
-(defn benchmark-contention
-  "Measures throughput under high contention (multiple threads, single ref)"
-  [n-threads n-txns-per-thread]
-  (let [counter (stm/ref 0)
-        latch (java.util.concurrent.CountDownLatch. n-threads)
-        start-latch (java.util.concurrent.CountDownLatch. 1)
-        threads (doall
-                 (for [_ (range n-threads)]
-                   (Thread.
-                    (fn []
-                      (.countDown latch)
-                      (.await start-latch)
-                      (dotimes [_ n-txns-per-thread]
-                        (stm/dosync
-                         (stm/alter counter inc)))))))]
+(defn- launch-threads [n f]
+  ;; ready latch synchronises all threads to start simultaneously
+  (let [ready   (CountDownLatch. n)
+        gate    (CountDownLatch. 1)
+        threads (into-array Thread
+                            (for [i (range n)]
+                              (Thread.
+                               ^Runnable
+                               (fn []
+                                 (.countDown ready)
+                                 (.await ^CountDownLatch gate)
+                                 (f i)))))]
     (doseq [^Thread t threads] (.start t))
-    (.await latch)  ; Wait for all threads to be ready
-    (let [start (System/nanoTime)]
-      (.countDown start-latch)  ; Start all threads simultaneously
-      (doseq [^Thread t threads] (.join t))
-      (let [elapsed-ms (/ (- (System/nanoTime) start) 1e6)
-            total-txns (* n-threads n-txns-per-thread)
-            txns-per-sec (/ total-txns (/ elapsed-ms 1000))
-            final-value (stm/deref counter)
-            expected (* n-threads n-txns-per-thread)]
-        {:threads n-threads
-         :total-txns total-txns
-         :elapsed-ms (format "%.2f" elapsed-ms)
-         :txns-per-sec (format "%.0f" txns-per-sec)
-         :final-value final-value
-         :expected expected
-         :correct? (= final-value expected)}))))
+    (.await ready)
+    [threads gate]))
 
-(defn benchmark-read-write-mix
-  "Measures throughput with mixed read/write workload"
-  [n-refs n-threads n-ops-per-thread write-ratio]
-  (let [refs (vec (repeatedly n-refs #(stm/ref 0)))
-        latch (java.util.concurrent.CountDownLatch. n-threads)
-        start-latch (java.util.concurrent.CountDownLatch. 1)
+(defn- join-all [threads]
+  (doseq [^Thread t threads] (.join t)))
+
+(defn- run-contention [make-ref alter-ref deref-fn dosync n-threads n-txns]
+  (let [counter (make-ref 0)
+        [threads ^CountDownLatch gate] (launch-threads n-threads
+                                                       (fn [_]
+                                                         (dotimes [_ n-txns]
+                                                           (dosync #(alter-ref counter inc)))))
+        [_ elapsed] (timed (.countDown gate) (join-all threads))
+        total   (* n-threads n-txns)
+        final   (deref-fn counter)]
+    {:threads      n-threads
+     :total-txns   total
+     :elapsed-ms   (format "%.2f" elapsed)
+     :txns-per-sec (format "%.0f" (/ total (/ elapsed 1000)))
+     :final-value  final
+     :expected     total
+     :correct?     (= final total)}))
+
+(defn- run-low-contention [make-ref alter-ref deref-fn dosync n-threads n-txns]
+  ;; each thread owns a dedicated ref so there is no write conflict
+  (let [refs    (vec (repeatedly n-threads #(make-ref 0)))
+        [threads ^CountDownLatch gate] (launch-threads n-threads
+                                                       (fn [i]
+                                                         (let [r (nth refs i)]
+                                                           (dotimes [_ n-txns]
+                                                             (dosync #(alter-ref r inc))))))
+        [_ elapsed] (timed (.countDown gate) (join-all threads))
+        total   (* n-threads n-txns)
+        finals  (mapv deref-fn refs)]
+    {:threads      n-threads
+     :total-txns   total
+     :elapsed-ms   (format "%.2f" elapsed)
+     :txns-per-sec (format "%.0f" (/ total (/ elapsed 1000)))
+     :contention   :low
+     :correct?     (every? #(= % n-txns) finals)}))
+
+(defn- run-bank-transfer [make-ref alter-ref deref-fn dosync n-accounts n-threads n-txns]
+  (let [accounts   (vec (repeatedly n-accounts #(make-ref 1000)))
+        successful (atom 0)
+        [threads ^CountDownLatch gate] (launch-threads n-threads
+                                                       (fn [_]
+                                                         (dotimes [_ n-txns]
+                                                           (let [from-idx (rand-int n-accounts)
+                                                                 to-idx   (rand-int n-accounts)]
+                                                             (when (not= from-idx to-idx)
+                                                               (let [from (nth accounts from-idx)
+                                                                     to   (nth accounts to-idx)
+                                                                     amt  (inc (rand-int 100))]
+                                                                 (when (dosync
+                                                                        #(when (>= (deref-fn from) amt)
+                                                                           (alter-ref from - amt)
+                                                                           (alter-ref to + amt)
+                                                                           true))
+                                                                   (swap! successful inc))))))))
+        [_ elapsed] (timed (.countDown gate) (join-all threads))
+        succ      @successful
+        total-bal (dosync #(reduce + (map deref-fn accounts)))]
+    {:threads          n-threads
+     :accounts         n-accounts
+     :attempted-txns   (* n-threads n-txns)
+     :successful-txns  succ
+     :elapsed-ms       (format "%.2f" elapsed)
+     :txns-per-sec     (format "%.0f" (/ succ (/ elapsed 1000)))
+     :total-balance    total-bal
+     :expected-balance (* n-accounts 1000)
+     :correct?         (= total-bal (* n-accounts 1000))}))
+
+(defn- run-read-write-mix [make-ref alter-ref deref-fn dosync n-refs n-threads n-ops write-ratio]
+  (let [refs         (vec (repeatedly n-refs #(make-ref 0)))
         total-writes (atom 0)
-        threads (doall
-                 (for [_ (range n-threads)]
-                   (Thread.
-                    (fn []
-                      (.countDown latch)
-                      (.await start-latch)
-                      (dotimes [_ n-ops-per-thread]
-                        (if (< (rand) write-ratio)
-                          (do
-                            (swap! total-writes inc)
-                            (stm/dosync
-                             (let [r (rand-nth refs)]
-                               (stm/alter r inc))))
-                          (stm/dosync
-                           (reduce + (map stm/deref refs)))))))))]
-    (doseq [^Thread t threads] (.start t))
-    (.await latch)
-    (let [start (System/nanoTime)]
-      (.countDown start-latch)
-      (doseq [^Thread t threads] (.join t))
-      (let [elapsed-ms (/ (- (System/nanoTime) start) 1e6)
-            total-ops (* n-threads n-ops-per-thread)
-            ops-per-sec (/ total-ops (/ elapsed-ms 1000))
-            final-sum (reduce + (map stm/deref refs))
-            writes @total-writes]
-        {:threads n-threads
-         :refs n-refs
-         :total-ops total-ops
-         :writes writes
-         :reads (- total-ops writes)
-         :write-ratio (format "%.1f%%" (* write-ratio 100))
-         :elapsed-ms (format "%.2f" elapsed-ms)
-         :ops-per-sec (format "%.0f" ops-per-sec)
-         :final-sum final-sum
-         :correct? (= final-sum writes)}))))
+        [threads ^CountDownLatch gate] (launch-threads n-threads
+                                                       (fn [_]
+                                                         (dotimes [_ n-ops]
+                                                           (if (< (rand) write-ratio)
+                                                             (do (swap! total-writes inc)
+                                                                 (dosync #(alter-ref (rand-nth refs) inc)))
+                                                             (dosync #(reduce + (map deref-fn refs)))))))
+        [_ elapsed] (timed (.countDown gate) (join-all threads))
+        total-ops   (* n-threads n-ops)
+        writes      @total-writes
+        final-sum   (reduce + (map deref-fn refs))]
+    {:threads      n-threads
+     :refs         n-refs
+     :total-ops    total-ops
+     :writes       writes
+     :reads        (- total-ops writes)
+     :write-ratio  (format "%.0f%%" (* write-ratio 100))
+     :elapsed-ms   (format "%.2f" elapsed)
+     :txns-per-sec (format "%.0f" (/ total-ops (/ elapsed 1000)))
+     :final-sum    final-sum
+     :correct?     (= final-sum writes)}))
 
-(defn benchmark-bank-transfer
-  "Measures throughput with realistic bank transfer scenario"
-  [n-accounts n-threads n-transfers-per-thread]
-  (let [accounts (vec (repeatedly n-accounts #(stm/ref 1000)))
-        latch (java.util.concurrent.CountDownLatch. n-threads)
-        start-latch (java.util.concurrent.CountDownLatch. 1)
-        successful-transfers (atom 0)
-        threads (doall
-                 (for [_ (range n-threads)]
-                   (Thread.
-                    (fn []
-                      (.countDown latch)
-                      (.await start-latch)
-                      (dotimes [_ n-transfers-per-thread]
-                        (let [from-idx (rand-int n-accounts)
-                              to-idx (rand-int n-accounts)]
-                          (when (not= from-idx to-idx)
-                            (let [from (nth accounts from-idx)
-                                  to (nth accounts to-idx)
-                                  amount (inc (rand-int 100))
-                                  success? (stm/dosync
-                                            (when (>= (stm/deref from) amount)
-                                              (stm/alter from - amount)
-                                              (stm/alter to + amount)
-                                              true))]
-                              (when success?
-                                (swap! successful-transfers inc))))))))))]
-    (doseq [^Thread t threads] (.start t))
-    (.await latch)
-    (let [start (System/nanoTime)]
-      (.countDown start-latch)
-      (doseq [^Thread t threads] (.join t))
-      (let [elapsed-ms (/ (- (System/nanoTime) start) 1e6)
-            successful @successful-transfers
-            txns-per-sec (/ successful (/ elapsed-ms 1000))
-            total-balance (stm/dosync (reduce + (map stm/deref accounts)))
-            expected-balance (* n-accounts 1000)]
-        {:threads n-threads
-         :accounts n-accounts
-         :attempted-txns (* n-threads n-transfers-per-thread)
-         :successful-txns successful
-         :elapsed-ms (format "%.2f" elapsed-ms)
-         :txns-per-sec (format "%.0f" txns-per-sec)
-         :total-balance total-balance
-         :expected-balance expected-balance
-         :correct? (= total-balance expected-balance)}))))
+(defn- compare-scenario [label f]
+  (println (str "\n" label))
+  (let [opus   (f stm/ref stm/alter stm/deref
+                  #(stm/dosync (%)))
+        native (f clojure.core/ref clojure.core/alter clojure.core/deref
+                  #(clojure.core/dosync (%)))]
+    (println (format "  %-12s txns/sec: %s  correct: %s"
+                     "opusdb" (:txns-per-sec opus)   (:correct? opus)))
+    (println (format "  %-12s txns/sec: %s  correct: %s"
+                     "native" (:txns-per-sec native) (:correct? native)))))
 
-(defn benchmark-low-contention
-  "Measures throughput when each thread works on different refs (low contention)"
-  [n-threads n-txns-per-thread]
-  (let [refs (vec (repeatedly n-threads #(stm/ref 0)))
-        latch (java.util.concurrent.CountDownLatch. n-threads)
-        start-latch (java.util.concurrent.CountDownLatch. 1)
-        threads (doall
-                 (for [i (range n-threads)]
-                   (Thread.
-                    (fn []
-                      (.countDown latch)
-                      (.await start-latch)
-                      (let [my-ref (nth refs i)]
-                        (dotimes [_ n-txns-per-thread]
-                          (stm/dosync
-                           (stm/alter my-ref inc))))))))]
-    (doseq [^Thread t threads] (.start t))
-    (.await latch)
-    (let [start (System/nanoTime)]
-      (.countDown start-latch)
-      (doseq [^Thread t threads] (.join t))
-      (let [elapsed-ms (/ (- (System/nanoTime) start) 1e6)
-            total-txns (* n-threads n-txns-per-thread)
-            txns-per-sec (/ total-txns (/ elapsed-ms 1000))
-            final-values (mapv stm/deref refs)
-            correct? (every? #(= % n-txns-per-thread) final-values)]
-        {:threads n-threads
-         :total-txns total-txns
-         :elapsed-ms (format "%.2f" elapsed-ms)
-         :txns-per-sec (format "%.0f" txns-per-sec)
-         :contention "low"
-         :correct? correct?}))))
+(defn- run-throughput-benchmarks []
+  (println "\n=== Throughput Benchmarks ===")
 
-(defn benchmark-with-criterium
-  "Uses criterium for statistical benchmarking"
-  []
-  (println "\n=== Criterium Statistical Benchmarks ===\n")
+  (println "\n--- High Contention (single ref) ---")
+  (doseq [n [4 8 16]]
+    (compare-scenario (str "  " n " threads:")
+                      (fn [make-ref alter-ref deref-fn dosync]
+                        (run-contention make-ref alter-ref deref-fn dosync n 10000))))
 
-  (println "Single-threaded increment:")
-  (let [r (stm/ref 0)]
-    (crit/quick-bench
-     (stm/dosync
-      (stm/alter r inc))))
+  (println "\n--- Low Contention (isolated refs) ---")
+  (doseq [n [4 8 16]]
+    (compare-scenario (str "  " n " threads:")
+                      (fn [make-ref alter-ref deref-fn dosync]
+                        (run-low-contention make-ref alter-ref deref-fn dosync n 10000))))
 
-  (println "\nSingle ref-set:")
-  (let [r (stm/ref 0)]
-    (crit/quick-bench
-     (stm/dosync
-      (stm/ref-set r 42))))
+  (println "\n--- Bank Transfer (20 accounts) ---")
+  (doseq [n [4 8 16]]
+    (compare-scenario (str "  " n " threads:")
+                      (fn [make-ref alter-ref deref-fn dosync]
+                        (run-bank-transfer make-ref alter-ref deref-fn dosync 20 n 5000))))
 
-  (println "\nRead-only transaction (5 refs):")
-  (let [refs (vec (repeatedly 5 #(stm/ref 0)))]
-    (crit/quick-bench
-     (stm/dosync
-      (reduce + (map stm/deref refs)))))
+  (println "\n--- Read-Heavy Mix (10% writes, 10 refs) ---")
+  (doseq [n [4 8]]
+    (compare-scenario (str "  " n " threads:")
+                      (fn [make-ref alter-ref deref-fn dosync]
+                        (run-read-write-mix make-ref alter-ref deref-fn dosync 10 n 5000 0.1))))
 
-  (println "\nRead-only transaction (10 refs):")
-  (let [refs (vec (repeatedly 10 #(stm/ref 0)))]
-    (crit/quick-bench
-     (stm/dosync
-      (reduce + (map stm/deref refs)))))
+  (println "\n--- Write-Heavy Mix (90% writes, 10 refs) ---")
+  (doseq [n [4 8]]
+    (compare-scenario (str "  " n " threads:")
+                      (fn [make-ref alter-ref deref-fn dosync]
+                        (run-read-write-mix make-ref alter-ref deref-fn dosync 10 n 5000 0.9)))))
 
-  (println "\nWrite transaction (5 refs):")
-  (let [refs (vec (repeatedly 5 #(stm/ref 0)))]
-    (crit/quick-bench
-     (stm/dosync
-      (doseq [r refs]
-        (stm/alter r inc))))))
+(defn- run-criterium-benchmarks []
+  (println "\n=== Criterium Statistical Benchmarks ===")
+  (doseq [[label opus-thunk native-thunk]
+          [["Single increment"
+            (let [r (stm/ref 0)]
+              #(stm/dosync (stm/alter r inc)))
+            (let [r (clojure.core/ref 0)]
+              #(clojure.core/dosync (clojure.core/alter r inc)))]
+
+           ["Single ref-set"
+            (let [r (stm/ref 0)]
+              #(stm/dosync (stm/ref-set r 42)))
+            (let [r (clojure.core/ref 0)]
+              #(clojure.core/dosync (ref-set r 42)))]
+
+           ["Read-only 5 refs"
+            (let [rs (vec (repeatedly 5 #(stm/ref 0)))]
+              #(stm/dosync (reduce + (map stm/deref rs))))
+            (let [rs (vec (repeatedly 5 #(clojure.core/ref 0)))]
+              #(clojure.core/dosync (reduce + (map clojure.core/deref rs))))]
+
+           ["Read-only 10 refs"
+            (let [rs (vec (repeatedly 10 #(stm/ref 0)))]
+              #(stm/dosync (reduce + (map stm/deref rs))))
+            (let [rs (vec (repeatedly 10 #(clojure.core/ref 0)))]
+              #(clojure.core/dosync (reduce + (map clojure.core/deref rs))))]
+
+           ["Write 5 refs"
+            (let [rs (vec (repeatedly 5 #(stm/ref 0)))]
+              #(stm/dosync (doseq [r rs] (stm/alter r inc))))
+            (let [rs (vec (repeatedly 5 #(clojure.core/ref 0)))]
+              #(clojure.core/dosync (doseq [r rs] (clojure.core/alter r inc))))]]]
+
+    (println (str "\n" label " — opusdb:"))
+    (crit/quick-bench (opus-thunk))
+    (println (str "\n" label " — native:"))
+    (crit/quick-bench (native-thunk))))
 
 (defn run-all-benchmarks []
-  (println "\n=== Throughput Benchmarks ===\n")
-
-  (println "1. Simple Increments (single-threaded, 10 refs):")
-  (println (benchmark-simple-increments 10 10000))
-
-  (println "\n2. High Contention (multiple threads, single ref):")
-  (println "  4 threads:")
-  (println "   " (benchmark-contention 4 10000))
-  (println "  8 threads:")
-  (println "   " (benchmark-contention 8 10000))
-  (println "  16 threads:")
-  (println "   " (benchmark-contention 16 10000))
-
-  (println "\n3. Low Contention (isolated refs per thread):")
-  (println "  4 threads:")
-  (println "   " (benchmark-low-contention 4 10000))
-  (println "  8 threads:")
-  (println "   " (benchmark-low-contention 8 10000))
-  (println "  16 threads:")
-  (println "   " (benchmark-low-contention 16 10000))
-
-  (println "\n4. Read-Heavy Mix (10% writes, 10 refs):")
-  (println "  4 threads:")
-  (println "   " (benchmark-read-write-mix 10 4 5000 0.1))
-  (println "  8 threads:")
-  (println "   " (benchmark-read-write-mix 10 8 5000 0.1))
-
-  (println "\n5. Balanced Mix (50% writes, 10 refs):")
-  (println "  4 threads:")
-  (println "   " (benchmark-read-write-mix 10 4 5000 0.5))
-  (println "  8 threads:")
-  (println "   " (benchmark-read-write-mix 10 8 5000 0.5))
-
-  (println "\n6. Write-Heavy Mix (90% writes, 10 refs):")
-  (println "  4 threads:")
-  (println "   " (benchmark-read-write-mix 10 4 5000 0.9))
-  (println "  8 threads:")
-  (println "   " (benchmark-read-write-mix 10 8 5000 0.9))
-
-  (println "\n7. Bank Transfer (realistic workload, 20 accounts):")
-  (println "  4 threads:")
-  (println "   " (benchmark-bank-transfer 20 4 5000))
-  (println "  8 threads:")
-  (println "   " (benchmark-bank-transfer 20 8 5000))
-  (println "  16 threads:")
-  (println "   " (benchmark-bank-transfer 20 16 5000))
-
-  (benchmark-with-criterium))
+  (run-throughput-benchmarks)
+  (run-criterium-benchmarks))
 
 (run-all-benchmarks)
