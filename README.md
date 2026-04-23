@@ -47,59 +47,67 @@ Ten accounts, each initialised with 1,000 units. Transfers are atomic transactio
 ```
 === BANK TRANSFERS ===
 Total (should be 10000): 10000
-Successful transfers: 1853943
+Successful transfers: 1989346
 
 Benchmarking single transfer transaction:
-Evaluation count : 1307802 in 6 samples of 217967 calls.
-             Execution time mean : 462.907972 ns
-    Execution time std-deviation : 7.359488 ns
-   Execution time lower quantile : 456.536843 ns ( 2.5%)
-   Execution time upper quantile : 473.679177 ns (97.5%)
-                   Overhead used : 2.022131 ns
+Evaluation count : 278160 in 6 samples of 46360 calls.
+             Execution time mean : 2.226707 µs
+    Execution time std-deviation : 58.027795 ns
+   Execution time lower quantile : 2.158768 µs ( 2.5%)
+   Execution time upper quantile : 2.309807 µs (97.5%)
+                   Overhead used : 2.037598 ns
+
+Found 1 outliers in 6 samples (16.6667 %)
+        low-severe       1 (16.6667 %)
+ Variance from outliers : 13.8889 % Variance is moderately inflated by outliers
 
 Benchmarking low-contention concurrent transfers:
-Evaluation count : 279948 in 6 samples of 46658 calls.
-             Execution time mean : 2.399445 µs
-    Execution time std-deviation : 202.101903 ns
-   Execution time lower quantile : 2.235406 µs ( 2.5%)
-   Execution time upper quantile : 2.722913 µs (97.5%)
-                   Overhead used : 2.022131 ns
+(Rotating through different account pairs)
+Evaluation count : 274746 in 6 samples of 45791 calls.
+             Execution time mean : 2.281300 µs
+    Execution time std-deviation : 67.210583 ns
+   Execution time lower quantile : 2.227851 µs ( 2.5%)
+   Execution time upper quantile : 2.384188 µs (97.5%)
+                   Overhead used : 2.037598 ns
 
 Benchmarking medium-contention scenario:
-Evaluation count : 262860 in 6 samples of 43810 calls.
-             Execution time mean : 2.340187 µs
-    Execution time std-deviation : 283.667460 ns
-   Execution time lower quantile : 2.172131 µs ( 2.5%)
-   Execution time upper quantile : 2.781024 µs (97.5%)
-                   Overhead used : 2.022131 ns
+(All transfers touching accounts 0-4)
+Evaluation count : 265344 in 6 samples of 44224 calls.
+             Execution time mean : 2.315170 µs
+    Execution time std-deviation : 77.470009 ns
+   Execution time lower quantile : 2.236750 µs ( 2.5%)
+   Execution time upper quantile : 2.428696 µs (97.5%)
+                   Overhead used : 2.037598 ns
 
 Benchmarking high-contention scenario:
-Evaluation count : 1299168 in 6 samples of 216528 calls.
-             Execution time mean : 480.362177 ns
-    Execution time std-deviation : 17.811450 ns
-   Execution time lower quantile : 462.506988 ns ( 2.5%)
-   Execution time upper quantile : 505.569432 ns (97.5%)
-                   Overhead used : 2.022131 ns
+(All transfers between accounts 0 and 1)
+Evaluation count : 271194 in 6 samples of 45199 calls.
+             Execution time mean : 2.309667 µs
+    Execution time std-deviation : 78.939990 ns
+   Execution time lower quantile : 2.243977 µs ( 2.5%)
+   Execution time upper quantile : 2.430316 µs (97.5%)
+                   Overhead used : 2.037598 ns
 
 Benchmarking extreme-contention with futures:
-Evaluation count : 26478 in 6 samples of 4413 calls.
-             Execution time mean : 22.829702 µs
-    Execution time std-deviation : 454.334272 ns
-   Execution time lower quantile : 22.535669 µs ( 2.5%)
-   Execution time upper quantile : 23.613314 µs (97.5%)
-                   Overhead used : 2.022131 ns
+(20 threads all transferring from/to same 2 accounts)
+Evaluation count : 402 in 6 samples of 67 calls.
+             Execution time mean : 1.717133 ms
+    Execution time std-deviation : 97.714707 µs
+   Execution time lower quantile : 1.609434 ms ( 2.5%)
+   Execution time upper quantile : 1.826020 ms (97.5%)
+                   Overhead used : 2.037598 ns
 ```
 
 #### Summary
 
 | Scenario                        | Mean Latency | Throughput          |
 | ------------------------------- | ------------ | ------------------- |
-| Single transfer                 | 463 ns       | —                   |
-| Low-contention                  | 2.40 µs      | —                   |
-| Medium-contention               | 2.34 µs      | —                   |
-| High-contention                 | 480 ns       | —                   |
-| Extreme-contention (20 futures) | 22.8 µs      | —                   |
-| Stress test (20 threads, 5s)    | —            | 1,853,943 transfers |
+| Single transfer                 | 2.23 µs      | —                   |
+| Low-contention                  | 2.28 µs      | —                   |
+| Medium-contention               | 2.32 µs      | —                   |
+| High-contention                 | 2.31 µs      | —                   |
+| Extreme-contention (20 futures) | 1.72 ms      | —                   |
+| Stress test (20 threads, 5s)    | —            | 1,989,346 transfers |
 
 Zero data inconsistencies across all scenarios. Total balance invariant maintained throughout.
 
@@ -113,112 +121,136 @@ Comprehensive STM performance testing across workload patterns with thread scali
 
 | #   | Scenario              | Description                                                   |
 | --- | --------------------- | ------------------------------------------------------------- |
-| 1   | Simple Increments     | Single-threaded baseline, no concurrency                      |
-| 2   | High Contention       | Multiple threads competing for a single shared ref            |
-| 3   | Low Contention        | Each thread operates on an isolated ref with no overlap       |
+| 1   | High Contention       | Multiple threads competing for a single shared ref            |
+| 2   | Low Contention        | Each thread operates on an isolated ref with no overlap       |
+| 3   | Bank Transfer         | Realistic financial transactions with abort conditions        |
 | 4   | Read-Heavy Mix        | 10% writes — read-dominated workload                          |
 | 5   | Write-Heavy Mix       | 90% writes — write-dominated workload with frequent conflicts |
-| 6   | Bank Transfer         | Realistic financial transactions with abort conditions        |
-| 7   | Criterium Statistical | Precise latency measurements via statistical sampling         |
+| 6   | Criterium Statistical | Precise latency measurements via statistical sampling         |
 
 #### Results
 
 ```
 === Throughput Benchmarks ===
 
-1. Simple Increments (single-threaded, 10 refs):
-{:txns 10000, :refs 10, :elapsed-ms 70.77, :txns-per-sec 141312, :correct? true}
+--- High Contention (single ref) ---
 
-2. High Contention (multiple threads, single ref):
   4 threads:
-    {:threads 4, :total-txns 40000, :elapsed-ms 108.63, :txns-per-sec 368208,
-     :final-value 40000, :expected 40000, :correct? true}
+  opusdb  txns/sec: 339950  correct: true
+
   8 threads:
-    {:threads 8, :total-txns 80000, :elapsed-ms 173.50, :txns-per-sec 461083,
-     :final-value 80000, :expected 80000, :correct? true}
+  opusdb  txns/sec: 357034  correct: true
+
   16 threads:
-    {:threads 16, :total-txns 160000, :elapsed-ms 337.53, :txns-per-sec 474034,
-     :final-value 160000, :expected 160000, :correct? true}
+  opusdb  txns/sec: 432081  correct: true
 
-3. Low Contention (isolated refs per thread):
+--- Low Contention (isolated refs) ---
+
   4 threads:
-    {:threads 4, :total-txns 40000, :elapsed-ms 41.54, :txns-per-sec 962881,
-     :contention low, :correct? true}
+  opusdb  txns/sec: 833943  correct: true
+
   8 threads:
-    {:threads 8, :total-txns 80000, :elapsed-ms 52.61, :txns-per-sec 1520617,
-     :contention low, :correct? true}
+  opusdb  txns/sec: 767328  correct: true
+
   16 threads:
-    {:threads 16, :total-txns 160000, :elapsed-ms 104.50, :txns-per-sec 1531073,
-     :contention low, :correct? true}
+  opusdb  txns/sec: 1158596  correct: true
 
-4. Read-Heavy Mix (10% writes, 10 refs):
-  4 threads:
-    {:threads 4, :total-ops 20000, :writes 1962, :reads 18038, :write-ratio 10%,
-     :txns-per-sec 1116566, :elapsed-ms 17.91, :final-sum 1962, :correct? true}
-  8 threads:
-    {:threads 8, :total-ops 40000, :writes 4024, :reads 35976, :write-ratio 10%,
-     :txns-per-sec 873897, :elapsed-ms 45.77, :final-sum 4024, :correct? true}
+--- Bank Transfer (20 accounts) ---
 
-5. Write-Heavy Mix (90% writes, 10 refs):
   4 threads:
-    {:threads 4, :total-ops 20000, :writes 18002, :reads 1998, :write-ratio 90%,
-     :txns-per-sec 574909, :elapsed-ms 34.79, :final-sum 18002, :correct? true}
-  8 threads:
-    {:threads 8, :total-ops 40000, :writes 35994, :reads 4006, :write-ratio 90%,
-     :txns-per-sec 410014, :elapsed-ms 97.56, :final-sum 35994, :correct? true}
+  opusdb  txns/sec: 296916  correct: true
 
-6. Bank Transfer (realistic workload, 20 accounts):
-  4 threads:
-    {:threads 4, :successful-txns 18204, :total-balance 20000,
-     :attempted-txns 20000, :txns-per-sec 195088, :elapsed-ms 93.31, :correct? true}
   8 threads:
-    {:threads 8, :successful-txns 36493, :total-balance 20000,
-     :attempted-txns 40000, :txns-per-sec 237344, :elapsed-ms 153.76, :correct? true}
+  opusdb  txns/sec: 116288  correct: true
+
   16 threads:
-    {:threads 16, :successful-txns 72610, :total-balance 20000,
-     :attempted-txns 80000, :txns-per-sec 280413, :elapsed-ms 258.94, :correct? true}
+  opusdb  txns/sec: 101728  correct: true
+
+--- Read-Heavy Mix (10% writes, 10 refs) ---
+
+  4 threads:
+  opusdb  txns/sec: 1060610  correct: true
+
+  8 threads:
+  opusdb  txns/sec: 1456467  correct: true
+
+--- Write-Heavy Mix (90% writes, 10 refs) ---
+
+  4 threads:
+  opusdb  txns/sec: 420145  correct: true
+
+  8 threads:
+  opusdb  txns/sec: 271186  correct: true
 ```
 
 #### Criterium Statistical Benchmarks
 
 ```
-Single-threaded increment:
-             Execution time mean : 1.221553 µs
-    Execution time std-deviation : 77.246812 ns
+Single increment — opusdb:
+Evaluation count : 522468 in 6 samples of 87078 calls.
+             Execution time mean : 1.195893 µs
+    Execution time std-deviation : 38.364063 ns
+   Execution time lower quantile : 1.143009 µs ( 2.5%)
+   Execution time upper quantile : 1.238103 µs (97.5%)
+                   Overhead used : 2.037598 ns
 
-Single ref-set:
-             Execution time mean : 871.839717 ns
-    Execution time std-deviation : 55.588730 ns
+Single ref-set — opusdb:
+Evaluation count : 649356 in 6 samples of 108226 calls.
+             Execution time mean : 948.088967 ns
+    Execution time std-deviation : 32.831345 ns
+   Execution time lower quantile : 916.947074 ns ( 2.5%)
+   Execution time upper quantile : 999.723314 ns (97.5%)
+                   Overhead used : 2.037598 ns
 
-Read-only transaction (5 refs):
-             Execution time mean : 1.171001 µs
-    Execution time std-deviation : 17.560545 ns
+Found 1 outliers in 6 samples (16.6667 %)
+        low-severe       1 (16.6667 %)
+ Variance from outliers : 13.8889 % Variance is moderately inflated by outliers
 
-Read-only transaction (10 refs):
-             Execution time mean : 1.616187 µs
-    Execution time std-deviation : 49.005058 ns
+Read-only 5 refs — opusdb:
+Evaluation count : 618246 in 6 samples of 103041 calls.
+             Execution time mean : 977.382602 ns
+    Execution time std-deviation : 29.236433 ns
+   Execution time lower quantile : 948.148038 ns ( 2.5%)
+   Execution time upper quantile : 1.008833 µs (97.5%)
+                   Overhead used : 2.037598 ns
 
-Write transaction (5 refs):
-             Execution time mean : 3.456590 µs
-    Execution time std-deviation : 486.856671 ns
+Read-only 10 refs — opusdb:
+Evaluation count : 410340 in 6 samples of 68390 calls.
+             Execution time mean : 1.416513 µs
+    Execution time std-deviation : 47.489930 ns
+   Execution time lower quantile : 1.380883 µs ( 2.5%)
+   Execution time upper quantile : 1.492322 µs (97.5%)
+                   Overhead used : 2.037598 ns
+
+Found 1 outliers in 6 samples (16.6667 %)
+        low-severe       1 (16.6667 %)
+ Variance from outliers : 13.8889 % Variance is moderately inflated by outliers
+
+Write 5 refs — opusdb:
+Evaluation count : 185784 in 6 samples of 30964 calls.
+             Execution time mean : 3.338396 µs
+    Execution time std-deviation : 40.997854 ns
+   Execution time lower quantile : 3.292780 µs ( 2.5%)
+   Execution time upper quantile : 3.390519 µs (97.5%)
+                   Overhead used : 2.037598 ns
 ```
 
 #### Summary
 
 | Operation         | Mean Latency |
 | ----------------- | ------------ |
-| Single ref-set    | 872 ns       |
-| Single increment  | 1.22 µs      |
-| Read-only 5 refs  | 1.17 µs      |
-| Read-only 10 refs | 1.62 µs      |
-| Write 5 refs      | 3.46 µs      |
+| Single ref-set    | 948 ns       |
+| Single increment  | 1.20 µs      |
+| Read-only 5 refs  | 977 ns       |
+| Read-only 10 refs | 1.42 µs      |
+| Write 5 refs      | 3.34 µs      |
 
-| Scenario                      | Throughput (txns/sec) |
-| ----------------------------- | --------------------- |
-| Low contention (8–16 threads) | 1.5M+                 |
-| High contention (16 threads)  | 474k                  |
-| Read-heavy mix (4 threads)    | 1.1M                  |
-| Bank transfer (16 threads)    | 280k                  |
+| Scenario                     | Throughput (txns/sec) |
+| ---------------------------- | --------------------- |
+| Low contention (16 threads)  | 1.16M                 |
+| High contention (16 threads) | 432k                  |
+| Read-heavy mix (8 threads)   | 1.46M                 |
+| Bank transfer (4 threads)    | 297k                  |
 
 ---
 
