@@ -2,7 +2,7 @@
 
 An Experimental Relational Database for Academic Research in Clojure.
 
-<img width="480" height="480" alt="logo" src="https://github.com/user-attachments/assets/ba51138f-7354-4ffd-bb7c-4a53847ca7a1" />
+<img width="480" height="480" alt="opusdb_logo_v4" src="https://github.com/user-attachments/assets/13578c35-8b05-4b83-8903-e9f78c7cbd1c" />
 
 ## Table of Contents
 
@@ -10,7 +10,6 @@ An Experimental Relational Database for Academic Research in Clojure.
 - [Benchmarks](#benchmarks)
   - [Bank Transfer Benchmarks](#bank-transfer-benchmarks)
   - [Throughput Benchmarks](#throughput-benchmarks)
-  - [Native STM Comparison](#native-stm-comparison)
 - [API Reference](#api-reference)
 - [Contributing](#contributing)
 - [License](#license)
@@ -245,124 +244,12 @@ Evaluation count : 185784 in 6 samples of 30964 calls.
 | Read-only 10 refs | 1.42 µs      |
 | Write 5 refs      | 3.34 µs      |
 
-| Scenario                     | Throughput (txns/sec) |
-| ---------------------------- | --------------------- |
-| Low contention (16 threads)  | 1.16M                 |
-| High contention (16 threads) | 432k                  |
-| Read-heavy mix (8 threads)   | 1.46M                 |
-| Bank transfer (4 threads)    | 297k                  |
-
----
-
-### Native STM Comparison
-
-OpusDB STM is implemented entirely at the application level in Clojure, without modifications to the language runtime. This section compares it directly against Clojure's native `dosync` / `LockingTransaction` under identical workloads.
-
-#### Results
-
-```
-=== Throughput Benchmarks ===
-
---- High Contention (single ref) ---
-
-  4 threads:
-  opusdb       txns/sec: 204810  correct: true
-  native       txns/sec: 273522  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 289789  correct: true
-  native       txns/sec: 246724  correct: true
-
-  16 threads:
-  opusdb       txns/sec: 398263  correct: true
-  native       txns/sec: 682076  correct: true
-
---- Low Contention (isolated refs) ---
-
-  4 threads:
-  opusdb       txns/sec: 883499   correct: true
-  native       txns/sec: 7802013  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 991292    correct: true
-  native       txns/sec: 14462260  correct: true
-
-  16 threads:
-  opusdb       txns/sec: 1158357   correct: true
-  native       txns/sec: 14588923  correct: true
-
---- Bank Transfer (20 accounts) ---
-
-  4 threads:
-  opusdb       txns/sec: 203158  correct: true
-  native       txns/sec: 440438  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 238011   correct: true
-  native       txns/sec: 1832418  correct: true
-
-  16 threads:
-  opusdb       txns/sec: 265853   correct: true
-  native       txns/sec: 1261212  correct: true
-
---- Read-Heavy Mix (10% writes, 10 refs) ---
-
-  4 threads:
-  opusdb       txns/sec: 913282   correct: true
-  native       txns/sec: 2437521  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 922852   correct: true
-  native       txns/sec: 3068383  correct: true
-
---- Write-Heavy Mix (90% writes, 10 refs) ---
-
-  4 threads:
-  opusdb       txns/sec: 683098   correct: true
-  native       txns/sec: 3559115  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 485099   correct: true
-  native       txns/sec: 3195161  correct: true
-
-=== Criterium Statistical Benchmarks ===
-
-Single increment — opusdb:   1.229 µs
-Single increment — native:   213 ns
-
-Single ref-set — opusdb:     909 ns
-Single ref-set — native:     240 ns
-
-Read-only 5 refs — opusdb:   1.188 µs
-Read-only 5 refs — native:   421 ns
-
-Read-only 10 refs — opusdb:  1.636 µs
-Read-only 10 refs — native:  538 ns
-
-Write 5 refs — opusdb:       3.543 µs
-Write 5 refs — native:       623 ns
-```
-
-#### Analysis
-
-| Scenario                   | OpusDB   | Native   | Ratio           |
-| -------------------------- | -------- | -------- | --------------- |
-| Single increment           | 1.23 µs  | 213 ns   | ~5.8x           |
-| Single ref-set             | 909 ns   | 240 ns   | ~3.8x           |
-| Read-only 5 refs           | 1.19 µs  | 421 ns   | ~2.8x           |
-| Write 5 refs               | 3.54 µs  | 623 ns   | ~5.7x           |
-| High contention, 8 threads | 289k tps | 247k tps | **OpusDB +17%** |
-
-The performance gap on uncontended workloads is expected and attributable to implementation level: Clojure's native STM is a JVM-optimised Java implementation (`LockingTransaction.java`) with direct field access, lock striping, and years of JIT optimisation. OpusDB STM operates entirely in Clojure, paying for `IdentityHashMap` operations, `volatile!` reads, and atom CAS on every ref write.
-
-Notably, at 8-thread high contention, OpusDB outperforms native STM. This is the ownership-stealing conflict resolution protocol working as intended — higher transaction IDs steal ownership and immediately abort lower-priority transactions, reducing the retry cycles that native STM's backoff strategy incurs under sustained contention.
-
-The throughput overhead is a deliberate tradeoff. OpusDB STM provides capabilities the native implementation cannot:
-
-- `on-commit` handlers — side effects deferred until successful commit
-- `on-rollback` handlers — cleanup guaranteed on abort or retry
-- A fully public API with no package-private visibility restrictions
-- Runtime independence — no forking or patching of `clojure.lang`
+| Scenario                      | Throughput (txns/sec) |
+| ----------------------------- | --------------------- |
+| Low contention (16 threads)   | 1.16M                 |
+| High contention (16 threads)  | 432k                  |
+| Read-heavy mix (8 threads)    | 1.46M                 |
+| Bank transfer (4 threads)     | 297k                  |
 
 ---
 
