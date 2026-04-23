@@ -3,193 +3,217 @@
   (:require
    [opusdb.atomic.tx-hooks :as tx])
   (:import
-   [java.util Collections IdentityHashMap]
+   [java.util IdentityHashMap]
    [java.util.concurrent ConcurrentHashMap]
-   [java.util.concurrent.atomic AtomicInteger AtomicLong]))
+   [java.util.concurrent.atomic AtomicLong]
+   [java.util.concurrent ThreadLocalRandom]))
 
-(def ^:private MAX_HISTORY 16)
-(def ^:private COMMIT_LOCK (Object.))
-(def ^:private ^AtomicLong WRITE_POINT (AtomicLong.))
-(def ^:private ^AtomicLong TRANSACTION_ID (AtomicLong.))
-(def ^:private ^ConcurrentHashMap ACTIVE_TRANSACTIONS (ConcurrentHashMap.))
+(def ^:private max-history   16)
+(def ^:private max-retries   256)
+(def ^:private base-sleep-ms  1)
+(def ^:private max-sleep-ms  32)
 
-(def ^{:private true :dynamic true} *current-transaction* nil)
+(def ^:private commit-lock             (Object.))
+(def ^:private ^AtomicLong write-point (AtomicLong.))
+(def ^:private ^AtomicLong tx-counter  (AtomicLong.))
+(def ^:private ^ConcurrentHashMap active-tx (ConcurrentHashMap.))
 
-(defn- make-transaction []
-  (let [read-point (.get WRITE_POINT)
-        tx-id      (.incrementAndGet TRANSACTION_ID)
-        tx         {:id          tx-id
-                    :read-set    (IdentityHashMap.)
-                    :write-set   (IdentityHashMap.)
-                    :read-point  read-point
-                    :retry-count (AtomicInteger.)
-                    :status      (volatile! ::ACTIVE)}]
-    (.put ACTIVE_TRANSACTIONS tx-id tx)
+(def ^{:dynamic true} *tx* nil)
+
+;; Transaction lifecycle
+
+(defn- make-tx [retry-count]
+  (let [id (.incrementAndGet tx-counter)
+        tx {:id          id
+            :read-point  (.get write-point)
+            :read-set    (IdentityHashMap.)
+            :write-set   (IdentityHashMap.)
+            :retry-count retry-count
+            :status      (volatile! ::active)}]
+    (.put active-tx id tx)
     tx))
 
-(defn- next-transaction [tx]
-  ;; flush rollback handlers before creating a fresh transaction
-  (tx/rollback! (:id tx))
-  (let [n (.get ^AtomicInteger (:retry-count tx))]
-    ;; exponential backoff after the first retry
-    (when (pos? n)
-      (Thread/sleep (bit-shift-left 1 (min n 5)))))
-  (let [tx' (make-transaction)]
-    (.set ^AtomicInteger (:retry-count tx')
-          (.incrementAndGet ^AtomicInteger (:retry-count tx)))
-    tx'))
+(defn- next-tx [current]
+  (tx/rollback! (:id current))
+  (.remove active-tx (:id current))
+  (let [retries (:retry-count current)]
+    (when (>= retries max-retries)
+      (throw (ex-info "STM exceeded max retries" {:retries retries})))
+    (when (> retries 4)
+      (let [base   (min max-sleep-ms (bit-shift-left base-sleep-ms (min (- retries 4) 6)))
+            jitter (long (* base 0.25 (- (* 2 (.nextDouble (ThreadLocalRandom/current))) 1)))]
+        (Thread/sleep (max 0 (long (+ base jitter))))))
+    (make-tx (inc retries))))
 
-(defn- retry []
-  (throw (ex-info "Transaction retry" {:type ::ABORTED})))
+;; Abort signalling
 
-(defn- retry-if-aborted [tx]
-  (when (= @(:status tx) ::ABORTED)
-    (retry)))
+(defn- abort []
+  (throw (ex-info "Transaction retry" {:type ::aborted})))
+
+(defn- check-active! [tx]
+  (when (= @(:status tx) ::aborted)
+    (abort)))
+
+;; History
 
 (defn- find-entry [read-point history]
-  (let [index (Collections/binarySearch history
-                                        read-point
-                                        #(compare (:write-point %1) %2))]
-    (if (>= index 0)
-      (history index)
-      (let [index' (- (inc index))]
-        (when (pos? index')
-          (history (dec index')))))))
+  (loop [i (dec (count history))]
+    (when (>= i 0)
+      (let [entry (nth history i)]
+        (if (<= (:write-point entry) read-point)
+          entry
+          (recur (dec i)))))))
 
-(defn- ensure-read-consistency [read-set]
-  ;; abort if any ref was written after this transaction's read point
-  (doseq [[ref val] read-set]
-    (when (> (:write-point @ref) (:write-point val))
-      (retry))))
+(defn- trim-history [history]
+  (if (> (count history) max-history)
+    (vec (take-last max-history history))
+    history))
 
-(defn- apply-writes! [write-set]
-  (let [write-point' (.incrementAndGet WRITE_POINT)]
-    (doseq [[ref val] write-set]
-      (swap! ref
-             (fn [{:keys [history] :as state}]
-               (let [history' (conj history {:value val :write-point write-point'})
-                     ;; trim to bounded history window; subvec is O(1)
-                     history' (cond-> history'
-                                (> (count history') MAX_HISTORY)
-                                (subvec (- (count history') MAX_HISTORY)))]
-                 (assoc state
-                        :value       val
-                        :history     history'
-                        :write-point write-point'
-                        :owner       nil)))))))
+;; Ref
 
-(defn- commit [tx]
-  ;; check before acquiring the lock to avoid unnecessary contention
-  (retry-if-aborted tx)
-  (let [^IdentityHashMap rs (:read-set tx)
-        ^IdentityHashMap ws (:write-set tx)]
-    (when (seq ws)
-      (locking COMMIT_LOCK
-        ;; re-check after acquiring the lock; may have been aborted by a thief
-        (retry-if-aborted tx)
-        (ensure-read-consistency rs)
-        (apply-writes! ws)))
-    (vreset! (:status tx) ::COMMITTED)
-    (.remove ACTIVE_TRANSACTIONS (:id tx))
-    (tx/commit! (:id tx))))
+(defn ref [initial-val]
+  (let [wp    (.get write-point)
+        entry {:value initial-val :write-point wp}]
+    (atom {:value       initial-val
+           :write-point wp
+           :history     [entry]
+           :owner       nil
+           :lock        (Object.)})))
 
-(defn- execute [tx fun]
-  (try
-    (binding [*current-transaction* tx]
-      (let [r (fun)]
-        (commit tx)
-        [:ok r]))
-    (catch clojure.lang.ExceptionInfo e
-      ;; distinguish stm abort signals from real user exceptions
-      (if (= (:type (ex-data e)) ::ABORTED)
-        [:retry nil]
-        (throw e)))
-    (catch Exception e
-      [:abort e])))
+;; Ownership
 
-(defn- run [tx fun]
-  (loop [tx tx]
-    (let [[outcome value] (execute tx fun)]
-      (case outcome
-        :ok    value
-        :retry (recur (next-transaction tx))
-        :abort (do (tx/rollback! (:id tx))
-                   (throw value))))))
-
-(defn- acquire-ownership [ref tx]
-  ;; per-ref lock ensures atomic owner check-and-set
-  (let [lock (:lock @ref)]
+(defn- try-acquire! [target-ref tx]
+  (let [claimer-id (:id tx)
+        lock       (:lock @target-ref)]
     (monitor-enter lock)
     (try
-      (let [thief (:id tx)
-            owner (:owner @ref)]
-        (if (or (nil? owner) (>= thief owner))
-          (do
-            ;; higher tx-id steals ownership and aborts the lower transaction
-            (when (and owner (> thief owner))
-              (when-some [owner-tx (.get ACTIVE_TRANSACTIONS owner)]
-                (when (= @(:status owner-tx) ::ACTIVE)
-                  (vreset! (:status owner-tx) ::ABORTED))))
-            (swap! ref assoc :owner thief)
-            true)
-          false))
+      (let [owner-id (:owner @target-ref)]
+        (cond
+          (nil? owner-id)
+          (do (swap! target-ref assoc :owner claimer-id) true)
+
+          (= owner-id claimer-id)
+          true
+
+          (> claimer-id owner-id)
+          (do (when-some [owner-tx (.get active-tx owner-id)]
+                (when (= @(:status owner-tx) ::active)
+                  (vreset! (:status owner-tx) ::aborted)))
+              (swap! target-ref assoc :owner claimer-id)
+              true)
+
+          :else false))
       (finally
         (monitor-exit lock)))))
 
-(defn sync [fun]
-  ;; nested dosync calls reuse the ambient transaction
-  (if *current-transaction*
-    (fun)
-    (run (make-transaction) fun)))
+;; Validation
+
+(defn- validate-reads! [^IdentityHashMap read-set]
+  (doseq [[r entry] read-set]
+    (when (> (:write-point @r) (:write-point entry))
+      (abort))))
+
+;; Commit
+
+(defn- apply-writes! [^IdentityHashMap write-set]
+  (let [commit-point (.incrementAndGet write-point)]
+    (doseq [[r new-val] write-set]
+      (swap! r (fn [{:keys [history] :as state}]
+                 (assoc state
+                        :value       new-val
+                        :write-point commit-point
+                        :owner       nil
+                        :history     (trim-history
+                                      (conj history
+                                            {:value       new-val
+                                             :write-point commit-point}))))))))
+
+(defn- commit! [tx]
+  (check-active! tx)
+  (let [{:keys [id read-set write-set status]} tx]
+    (when (seq write-set)
+      (locking commit-lock
+        (check-active! tx)
+        (validate-reads! read-set)
+        (apply-writes! write-set)))
+    (vreset! status ::committed)
+    (.remove active-tx id)
+    (tx/commit! id)))
+
+;; Execution loop
+
+(defn- run-attempt [tx body-fn]
+  (try
+    (binding [*tx* tx]
+      (let [result (body-fn)]
+        (commit! tx)
+        [:ok result]))
+    (catch clojure.lang.ExceptionInfo ex
+      (if (= (:type (ex-data ex)) ::aborted)
+        [:abort nil]
+        [:exception ex]))
+    (catch Exception ex
+      [:exception ex])))
+
+(defn run-tx [body-fn]
+  (loop [tx (make-tx 0)]
+    (let [[tag value] (run-attempt tx body-fn)]
+      (case tag
+        :ok        value
+        :abort     (recur (next-tx tx))
+        :exception (do (tx/rollback! (:id tx))
+                       (.remove active-tx (:id tx))
+                       (throw value))))))
+
+;; Public API
+
+(defn sync [body-fn]
+  (if *tx*
+    (body-fn)
+    (run-tx body-fn)))
 
 (defmacro dosync [& body]
   `(sync (fn* [] ~@body)))
 
-(defn ref [val]
-  (let [write-point (.get WRITE_POINT)]
-    (atom {:owner       nil
-           :value       val
-           :write-point write-point
-           :history     [{:value val :write-point write-point}]
-           :lock        (Object.)})))
+(defn deref [target-ref]
+  (if-not *tx*
+    (:value @target-ref)
+    (let [tx                          *tx*
+          ^IdentityHashMap write-set  (:write-set tx)
+          ^IdentityHashMap read-set   (:read-set tx)]
+      (check-active! tx)
+      (cond
+        (.containsKey write-set target-ref)
+        (.get write-set target-ref)
 
-(defn deref [ref]
-  (if-not *current-transaction*
-    ;; fast path: no transaction, read the latest committed value directly
-    (:value @ref)
-    (let [tx *current-transaction*]
-      (retry-if-aborted tx)
-      (let [^IdentityHashMap rs (:read-set tx)
-            ^IdentityHashMap ws (:write-set tx)]
-        (or (.get ws ref)
-            (when-let [cached (.get rs ref)]
-              (:value cached))
-            (let [entry (find-entry (:read-point tx) (:history @ref))]
-              (when-not entry
-                (retry))
-              (.put rs ref {:value       (:value entry)
-                            :write-point (:write-point entry)})
-              (:value entry)))))))
+        (.containsKey read-set target-ref)
+        (:value (.get read-set target-ref))
 
-(defn ref-set [ref val]
-  (when-not *current-transaction*
+        :else
+        (let [snapshot (find-entry (:read-point tx) (:history @target-ref))]
+          (when-not snapshot (abort))
+          (.put read-set target-ref snapshot)
+          (:value snapshot))))))
+
+(defn ref-set [target-ref new-val]
+  (when-not *tx*
     (throw (IllegalStateException. "ref-set outside transaction")))
-  (let [tx *current-transaction*]
-    (retry-if-aborted tx)
-    (when-not (acquire-ownership ref tx)
-      (retry))
-    (.put ^IdentityHashMap (:write-set tx) ref val)
-    val))
+  (let [tx *tx*]
+    (check-active! tx)
+    (when-not (try-acquire! target-ref tx)
+      (abort))
+    (.put ^IdentityHashMap (:write-set tx) target-ref new-val)
+    new-val))
 
-(defn alter [ref fun & args]
-  (ref-set ref (apply fun (deref ref) args)))
+(defn alter [target-ref f & args]
+  (ref-set target-ref (apply f (deref target-ref) args)))
 
-(defn on-rollback [fun]
-  (if-let [tx *current-transaction*]
-    (tx/on-rollback (:id tx) fun)
-    (throw (IllegalStateException. "on-rollback outside transaction"))))
-
-(defn on-commit [fun]
-  (if-let [tx *current-transaction*]
-    (tx/on-commit (:id tx) fun)
+(defn on-commit [handler]
+  (if *tx*
+    (tx/on-commit (:id *tx*) handler)
     (throw (IllegalStateException. "on-commit outside transaction"))))
+
+(defn on-rollback [handler]
+  (if *tx*
+    (tx/on-rollback (:id *tx*) handler)
+    (throw (IllegalStateException. "on-rollback outside transaction"))))

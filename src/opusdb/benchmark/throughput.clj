@@ -11,7 +11,6 @@
      [result# (/ (- (System/nanoTime) start#) 1e6)]))
 
 (defn- launch-threads [n f]
-  ;; ready latch synchronises all threads to start simultaneously
   (let [ready   (CountDownLatch. n)
         gate    (CountDownLatch. 1)
         threads (into-array Thread
@@ -47,7 +46,6 @@
      :correct?     (= final total)}))
 
 (defn- run-low-contention [make-ref alter-ref deref-fn dosync n-threads n-txns]
-  ;; each thread owns a dedicated ref so there is no write conflict
   (let [refs    (vec (repeatedly n-threads #(make-ref 0)))
         [threads ^CountDownLatch gate] (launch-threads n-threads
                                                        (fn [i]
@@ -84,16 +82,16 @@
                                                                    (swap! successful inc))))))))
         [_ elapsed] (timed (.countDown gate) (join-all threads))
         succ      @successful
-        total-bal (dosync #(reduce + (map deref-fn accounts)))]
+        total-balance (dosync #(reduce + (map deref-fn accounts)))]
     {:threads          n-threads
      :accounts         n-accounts
      :attempted-txns   (* n-threads n-txns)
      :successful-txns  succ
      :elapsed-ms       (format "%.2f" elapsed)
      :txns-per-sec     (format "%.0f" (/ succ (/ elapsed 1000)))
-     :total-balance    total-bal
+     :total-balance    total-balance
      :expected-balance (* n-accounts 1000)
-     :correct?         (= total-bal (* n-accounts 1000))}))
+     :correct?         (= total-balance (* n-accounts 1000))}))
 
 (defn- run-read-write-mix [make-ref alter-ref deref-fn dosync n-refs n-threads n-ops write-ratio]
   (let [refs         (vec (repeatedly n-refs #(make-ref 0)))
@@ -120,90 +118,66 @@
      :final-sum    final-sum
      :correct?     (= final-sum writes)}))
 
-(defn- compare-scenario [label f]
+(defn- run-scenario [label f]
   (println (str "\n" label))
-  (let [opus   (f stm/ref stm/alter stm/deref
-                  #(stm/dosync (%)))
-        native (f clojure.core/ref clojure.core/alter clojure.core/deref
-                  #(clojure.core/dosync (%)))]
-    (println (format "  %-12s txns/sec: %s  correct: %s"
-                     "opusdb" (:txns-per-sec opus)   (:correct? opus)))
-    (println (format "  %-12s txns/sec: %s  correct: %s"
-                     "native" (:txns-per-sec native) (:correct? native)))))
+  (let [result (f stm/ref stm/alter stm/deref #(stm/dosync (%)))]
+    (println (format "  opusdb  txns/sec: %s  correct: %s"
+                     (:txns-per-sec result) (:correct? result)))))
 
 (defn- run-throughput-benchmarks []
   (println "\n=== Throughput Benchmarks ===")
 
   (println "\n--- High Contention (single ref) ---")
   (doseq [n [4 8 16]]
-    (compare-scenario (str "  " n " threads:")
-                      (fn [make-ref alter-ref deref-fn dosync]
-                        (run-contention make-ref alter-ref deref-fn dosync n 10000))))
+    (run-scenario (str "  " n " threads:")
+                  (fn [make-ref alter-ref deref-fn dosync]
+                    (run-contention make-ref alter-ref deref-fn dosync n 10000))))
 
   (println "\n--- Low Contention (isolated refs) ---")
   (doseq [n [4 8 16]]
-    (compare-scenario (str "  " n " threads:")
-                      (fn [make-ref alter-ref deref-fn dosync]
-                        (run-low-contention make-ref alter-ref deref-fn dosync n 10000))))
+    (run-scenario (str "  " n " threads:")
+                  (fn [make-ref alter-ref deref-fn dosync]
+                    (run-low-contention make-ref alter-ref deref-fn dosync n 10000))))
 
   (println "\n--- Bank Transfer (20 accounts) ---")
   (doseq [n [4 8 16]]
-    (compare-scenario (str "  " n " threads:")
-                      (fn [make-ref alter-ref deref-fn dosync]
-                        (run-bank-transfer make-ref alter-ref deref-fn dosync 20 n 5000))))
+    (run-scenario (str "  " n " threads:")
+                  (fn [make-ref alter-ref deref-fn dosync]
+                    (run-bank-transfer make-ref alter-ref deref-fn dosync 20 n 5000))))
 
   (println "\n--- Read-Heavy Mix (10% writes, 10 refs) ---")
   (doseq [n [4 8]]
-    (compare-scenario (str "  " n " threads:")
-                      (fn [make-ref alter-ref deref-fn dosync]
-                        (run-read-write-mix make-ref alter-ref deref-fn dosync 10 n 5000 0.1))))
+    (run-scenario (str "  " n " threads:")
+                  (fn [make-ref alter-ref deref-fn dosync]
+                    (run-read-write-mix make-ref alter-ref deref-fn dosync 10 n 5000 0.1))))
 
   (println "\n--- Write-Heavy Mix (90% writes, 10 refs) ---")
   (doseq [n [4 8]]
-    (compare-scenario (str "  " n " threads:")
-                      (fn [make-ref alter-ref deref-fn dosync]
-                        (run-read-write-mix make-ref alter-ref deref-fn dosync 10 n 5000 0.9)))))
+    (run-scenario (str "  " n " threads:")
+                  (fn [make-ref alter-ref deref-fn dosync]
+                    (run-read-write-mix make-ref alter-ref deref-fn dosync 10 n 5000 0.9)))))
 
 (defn- run-criterium-benchmarks []
   (println "\n=== Criterium Statistical Benchmarks ===")
-  (doseq [[label opus-thunk native-thunk]
+  (doseq [[label thunk]
           [["Single increment"
             (let [r (stm/ref 0)]
-              #(stm/dosync (stm/alter r inc)))
-            (let [r (clojure.core/ref 0)]
-              #(clojure.core/dosync (clojure.core/alter r inc)))]
-
+              #(stm/dosync (stm/alter r inc)))]
            ["Single ref-set"
             (let [r (stm/ref 0)]
-              #(stm/dosync (stm/ref-set r 42)))
-            (let [r (clojure.core/ref 0)]
-              #(clojure.core/dosync (ref-set r 42)))]
-
+              #(stm/dosync (stm/ref-set r 42)))]
            ["Read-only 5 refs"
             (let [rs (vec (repeatedly 5 #(stm/ref 0)))]
-              #(stm/dosync (reduce + (map stm/deref rs))))
-            (let [rs (vec (repeatedly 5 #(clojure.core/ref 0)))]
-              #(clojure.core/dosync (reduce + (map clojure.core/deref rs))))]
-
+              #(stm/dosync (reduce + (map stm/deref rs))))]
            ["Read-only 10 refs"
             (let [rs (vec (repeatedly 10 #(stm/ref 0)))]
-              #(stm/dosync (reduce + (map stm/deref rs))))
-            (let [rs (vec (repeatedly 10 #(clojure.core/ref 0)))]
-              #(clojure.core/dosync (reduce + (map clojure.core/deref rs))))]
-
+              #(stm/dosync (reduce + (map stm/deref rs))))]
            ["Write 5 refs"
             (let [rs (vec (repeatedly 5 #(stm/ref 0)))]
-              #(stm/dosync (doseq [r rs] (stm/alter r inc))))
-            (let [rs (vec (repeatedly 5 #(clojure.core/ref 0)))]
-              #(clojure.core/dosync (doseq [r rs] (clojure.core/alter r inc))))]]]
-
+              #(stm/dosync (doseq [r rs] (stm/alter r inc))))]]]
     (println (str "\n" label " — opusdb:"))
-    (crit/quick-bench (opus-thunk))
-    (println (str "\n" label " — native:"))
-    (crit/quick-bench (native-thunk))))
+    (crit/quick-bench (thunk))))
 
 (defn run-all-benchmarks []
   (run-throughput-benchmarks)
   (run-criterium-benchmarks))
-
-(run-all-benchmarks)
