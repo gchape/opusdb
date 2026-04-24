@@ -20,18 +20,22 @@
       "sec" (* value 1.0e6)
       (double value))))
 
-(def ^:private re-top-header    #"(?m)^=== (.+?) ===\s*$")
-(def ^:private re-sec-header    #"(?m)^--- (.+?) ---\s*$")
-(def ^:private re-threads       #"^\s*(\d+) threads:\s*$")
+;; Hardened regex: more flexible with whitespace and colons
+(def ^:private re-top-header    #"(?m)^===\s+(.+?)\s+===\s*$")
+(def ^:private re-sec-header    #"(?m)^---\s+(.+?)\s+---\s*$")
+(def ^:private re-threads       #"^\s*(\d+)\s+threads:\s*$")
 (def ^:private re-impl-line     #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+correct:\s+(true|false)")
-(def ^:private re-crit-label    #"^(.+?) — opusdb:\s*$")
-(def ^:private re-crit-mean     #"Execution time mean\s*:\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-crit-std      #"Execution time std-deviation\s*:\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-crit-lower    #"Execution time lower quantile\s*:\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-crit-upper    #"Execution time upper quantile\s*:\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-bank-total    #"Total \(should be (\d+) \):\s*(\d+)")
+(def ^:private re-crit-label    #"^(.+?)\s*—\s*opusdb:\s*$")
+
+;; Criterium output can vary slightly between versions; \s* instead of fixed spaces
+(def ^:private re-crit-mean     #"Execution time mean\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-std      #"Execution time std-deviation\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-lower    #"Execution time lower quantile\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-upper    #"Execution time upper quantile\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+
+(def ^:private re-bank-total    #"Total\s+\(should be\s+(\d+)\s*\):\s*(\d+)")
 (def ^:private re-bank-xfers    #"Successful transfers:\s*(\d+)")
-(def ^:private re-bank-scenario #"Benchmarking (.+?):")
+(def ^:private re-bank-scenario #"Benchmarking\s+(.+?):")
 
 (defn- parse-throughput-section [lines]
   (loop [[line & rest] lines
@@ -147,17 +151,17 @@
       (re-find re-top-header line)
       (let [[_ label] (re-find re-top-header line)
             acc'      (cond-> acc cur-sec (assoc-in [cur-top cur-sec] cur-lines))]
-        (recur rest label nil [] acc'))
+        (recur rest (str/trim label) nil [] acc'))
 
       (re-find re-sec-header line)
       (let [[_ label] (re-find re-sec-header line)
             acc'      (cond-> acc cur-sec (assoc-in [cur-top cur-sec] cur-lines))]
-        (recur rest cur-top label [] acc'))
+        (recur rest cur-top (str/trim label) [] acc'))
 
       :else
       (recur rest cur-top cur-sec (conj cur-lines line) acc))))
 
-(defn parse-throughput [^String stdout]
+(defn parse-all [^String stdout]
   (let [lines    (str/split-lines stdout)
         sections (split-sections lines)]
     {:throughput (some-> (get sections "Throughput Benchmarks")
@@ -166,11 +170,5 @@
                          vals
                          (->> (apply concat))
                          vec
-                         parse-criterium-blocks)}))
-
-(defn parse-bank [^String stdout]
-  (parse-bank-blocks (str/split-lines stdout)))
-
-(defn parse-all [^String stdout]
-  (merge (parse-throughput stdout)
-         {:bank (parse-bank stdout)}))
+                         parse-criterium-blocks)
+     :bank       (parse-bank-blocks lines)}))

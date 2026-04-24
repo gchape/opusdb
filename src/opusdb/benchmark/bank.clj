@@ -1,11 +1,14 @@
 (ns opusdb.benchmark.bank
   (:require
    [criterium.core :as crit]
-   [opusdb.atomic.stm :as stm]))
+   [opusdb.atomic.stm :as stm])
+  (:import
+   [java.util.concurrent ThreadLocalRandom]
+   [java.util.concurrent.atomic LongAdder]))
 
 (defn make-bank [n-accounts initial-balance]
   {:accounts  (vec (repeatedly n-accounts #(stm/ref initial-balance)))
-   :transfers (stm/ref 0)})
+   :transfers (LongAdder.)})
 
 (defn transfer [bank from to amount]
   (stm/dosync
@@ -14,17 +17,16 @@
      (when (>= from-bal amount)
        (stm/ref-set ((:accounts bank) from) (- from-bal amount))
        (stm/ref-set ((:accounts bank) to)   (+ to-bal amount))
-       (stm/alter (:transfers bank) inc)
+       (stm/on-commit #(.increment ^LongAdder (:transfers bank)))
        true))))
 
-;; Added for latency benchmarking to prevent "draining" accounts to 0
 (defn- transfer-forced [bank from to amount]
   (stm/dosync
    (let [from-bal (stm/deref ((:accounts bank) from))
          to-bal   (stm/deref ((:accounts bank) to))]
      (stm/ref-set ((:accounts bank) from) (- from-bal amount))
      (stm/ref-set ((:accounts bank) to)   (+ to-bal amount))
-     (stm/alter (:transfers bank) inc)
+     (stm/on-commit #(.increment ^LongAdder (:transfers bank)))
      true)))
 
 (defn total-balance [bank]
@@ -39,19 +41,20 @@
                            (Thread.
                             ^Runnable
                             (fn []
-                              (while @running
-                                (let [from (rand-int n-accounts)
-                                      to   (rand-int n-accounts)]
-                                  (when (not= from to)
-                                    (transfer bank from to
-                                              (inc (rand-int 50)))))))))
+                              (let [tlr (ThreadLocalRandom/current)]
+                                (while @running
+                                  (let [from (.nextInt tlr n-accounts)
+                                        to   (.nextInt tlr n-accounts)]
+                                    (when (not= from to)
+                                      (transfer bank from to
+                                                (inc (.nextInt tlr 50))))))))))
                          (range 20))]
     (run! #(.start ^Thread %) threads)
     (Thread/sleep 5000)
     (reset! running false)
     (run! #(.join ^Thread % 1000) threads)
     (println "Total (should be" (* n-accounts 1000) "):" (total-balance bank))
-    (println "Successful transfers:" (stm/deref (:transfers bank))))
+    (println "Successful transfers:" (.sum ^LongAdder (:transfers bank))))
 
   (println "\nBenchmarking single transfer transaction:")
   (let [bank (make-bank 10 1000)]

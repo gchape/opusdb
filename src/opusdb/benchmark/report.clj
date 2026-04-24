@@ -5,22 +5,29 @@
    [cheshire.core   :as json]
    [opusdb.benchmark.report.parse :as parse]))
 
+(defn- tex-safe [s]
+  (-> (str s)
+      (str/replace #"_" "\\\\_")
+      (str/replace #"%" "\\\\%")
+      (str/replace #"&" "\\\\&")
+      (str/replace #"\$" "\\\\$")))
+
 (def ^:private throughput-charts
   [["High Contention (single ref)"
     "throughput-high-contention"
-    "Throughput --- High Contention (single shared ref)"]
+    "Throughput: High Contention (single shared ref)"]
    ["Low Contention (isolated refs)"
     "throughput-low-contention"
-    "Throughput --- Low Contention (isolated refs)"]
+    "Throughput: Low Contention (isolated refs)"]
    ["Bank Transfer (20 accounts)"
     "throughput-bank-transfer"
-    "Throughput --- Bank Transfer (20 accounts)"]
+    "Throughput: Bank Transfer (20 accounts)"]
    ["Read-Heavy Mix (10% writes, 10 refs)"
     "throughput-read-heavy"
-    "Throughput --- Read-Heavy Mix (10\\% writes)"]
+    "Throughput: Read-Heavy Mix (10% writes)"]
    ["Write-Heavy Mix (90% writes, 10 refs)"
     "throughput-write-heavy"
-    "Throughput --- Write-Heavy Mix (90\\% writes)"]])
+    "Throughput: Write-Heavy Mix (90% writes)"]])
 
 (defn- pgf-scalability-chart [section-data title label]
   (str
@@ -28,19 +35,14 @@
    "  \\centering\n"
    "  \\begin{tikzpicture}\n"
    "    \\begin{axis}[\n"
-   "      title={" title "},\n"
+   "      title={" (tex-safe title) "},\n"
    "      xlabel={Thread count},\n"
    "      ylabel={Transactions / sec},\n"
-   "      width=0.75\\textwidth,\n"
-   "      height=6cm,\n"
-   "      xtick=data,\n"
-   "      ymin=0,\n"
-   "      ymajorgrids=true,\n"
-   "      grid style=dashed,\n"
-   "      mark=*,\n"
-   "      tick label style={font=\\small},\n"
-   "      label style={font=\\small},\n"
-   "      title style={font=\\small\\itshape},\n"
+   "      width=0.75\\textwidth, height=6cm,\n"
+   "      xtick=data, ymin=0,\n"
+   "      ymajorgrids=true, grid style=dashed,\n"
+   "      mark=*, tick label style={font=\\small},\n"
+   "      label style={font=\\small}, title style={font=\\small\\itshape},\n"
    "    ]\n"
    "    \\addplot[color=blue!40!black, mark=*] coordinates {\n"
    (str/join "\n"
@@ -51,8 +53,8 @@
    "    \\legend{opusdb STM}\n"
    "    \\end{axis}\n"
    "  \\end{tikzpicture}\n"
-   "  \\caption{" title "}\n"
-   "  \\label{fig:" label "}\n"
+   "  \\caption{" (tex-safe title) " (Scaling)}\n"
+   "  \\label{fig:" label "-scaling}\n"
    "\\end{figure}\n"))
 
 (defn- pgf-latency-chart [criterium-data title label]
@@ -63,27 +65,20 @@
      "  \\centering\n"
      "  \\begin{tikzpicture}\n"
      "    \\begin{axis}[\n"
-     "      title={" title "},\n"
+     "      title={" (tex-safe title) "},\n"
      "      xlabel={Mean execution time ($\\mu$s)},\n"
-     "      width=0.85\\textwidth,\n"
-     "      height=" (+ 3 (* n 0.7)) "cm,\n"
-     "      xbar,\n"
-     "      bar width=10pt,\n"
-     "      xmin=0,\n"
+     "      width=0.85\\textwidth, height=" (+ 3 (* n 0.7)) "cm,\n"
+     "      xbar, bar width=10pt, xmin=0,\n"
      "      enlarge x limits={upper, value=0.15},\n"
      "      ytick={" (str/join "," (range n)) "},\n"
      "      yticklabels={"
-     (str/join "," (map (fn [[lbl _]] (str "{" lbl "}")) rows))
+     (str/join "," (map (fn [[lbl _]] (str "{" (tex-safe lbl) "}")) rows))
      "},\n"
-     "      xmajorgrids=true,\n"
-     "      grid style=dashed,\n"
-     "      tick label style={font=\\small},\n"
-     "      label style={font=\\small},\n"
+     "      xmajorgrids=true, grid style=dashed,\n"
+     "      tick label style={font=\\small}, label style={font=\\small},\n"
      "      title style={font=\\small\\itshape},\n"
      "    ]\n"
-     "    \\addplot[\n"
-     "      fill=blue!40!black,\n"
-     "      draw=blue!40!black,\n"
+     "    \\addplot[fill=blue!40!black, draw=blue!40!black,\n"
      "      error bars/.cd, x dir=both, x explicit\n"
      "    ] coordinates {\n"
      (str/join "\n"
@@ -95,10 +90,9 @@
                           (format "%.3f" (double (:std data 0)))))
                 rows))
      "\n    };\n"
-     "    \\legend{opusdb STM}\n"
      "    \\end{axis}\n"
      "  \\end{tikzpicture}\n"
-     "  \\caption{" title "}\n"
+     "  \\caption{" (tex-safe title) "}\n"
      "  \\label{fig:" label "}\n"
      "\\end{figure}\n")))
 
@@ -108,26 +102,15 @@
    "  \\centering\n"
    "  \\begin{tikzpicture}\n"
    "    \\begin{axis}[\n"
-   "      title={" title "},\n"
-   "      xlabel={Thread count},\n"
-   "      ylabel={Transactions / sec},\n"
-   "      ybar,\n"
-   "      bar width=18pt,\n"
-   "      width=0.75\\textwidth,\n"
-   "      height=7cm,\n"
-   "      xtick=data,\n"
-   "      ymin=0,\n"
-   "      enlarge y limits={upper, value=0.15},\n"
-   "      ymajorgrids=true,\n"
-   "      grid style=dashed,\n"
-   "      nodes near coords,\n"
-   "      nodes near coords align={vertical},\n"
+   "      title={" (tex-safe title) "},\n"
+   "      xlabel={Thread count}, ylabel={Transactions / sec},\n"
+   "      ybar, bar width=18pt, width=0.75\\textwidth, height=7cm,\n"
+   "      xtick=data, ymin=0, enlarge y limits={upper, value=0.15},\n"
+   "      ymajorgrids=true, grid style=dashed,\n"
+   "      nodes near coords, nodes near coords align={vertical},\n"
    "      every node near coord/.append style={font=\\tiny, anchor=south},\n"
-   "      legend pos=north west,\n"
-   "      tick label style={font=\\small},\n"
-   "      label style={font=\\small},\n"
-   "      title style={font=\\small\\itshape},\n"
-   "      clip=false,\n"
+   "      tick label style={font=\\small}, label style={font=\\small},\n"
+   "      title style={font=\\small\\itshape}, clip=false,\n"
    "    ]\n"
    "    \\addplot[fill=blue!40!black, draw=blue!40!black] coordinates {\n"
    (str/join "\n"
@@ -135,10 +118,9 @@
                     (format "      (%d,%d)" threads (or opusdb 0)))
                   section-data))
    "\n    };\n"
-   "    \\legend{opusdb STM}\n"
    "    \\end{axis}\n"
    "  \\end{tikzpicture}\n"
-   "  \\caption{" title "}\n"
+   "  \\caption{" (tex-safe title) "}\n"
    "  \\label{fig:" label "}\n"
    "\\end{figure}\n"))
 
@@ -149,25 +131,18 @@
      "  \\centering\n"
      "  \\begin{tikzpicture}\n"
      "    \\begin{axis}[\n"
-     "      title={" title "},\n"
+     "      title={" (tex-safe title) "},\n"
      "      xlabel={Mean execution time ($\\mu$s)},\n"
-     "      width=0.85\\textwidth,\n"
-     "      height=" (+ 3 (* n 0.8)) "cm,\n"
-     "      xbar,\n"
-     "      bar width=12pt,\n"
-     "      xmin=0,\n"
+     "      width=0.85\\textwidth, height=" (+ 3 (* n 0.8)) "cm,\n"
+     "      xbar, bar width=12pt, xmode=log, xmin=1,\n"
      "      enlarge x limits={upper, value=0.15},\n"
      "      ytick={" (str/join "," (range n)) "},\n"
      "      yticklabels={" (str/join "," (map-indexed (fn [i _] (str "(\\romannumeral " (inc i) ")")) scenarios)) "},\n"
-     "      xmajorgrids=true,\n"
-     "      grid style=dashed,\n"
-     "      tick label style={font=\\small},\n"
-     "      label style={font=\\small},\n"
+     "      xmajorgrids=true, grid style=dashed,\n"
+     "      tick label style={font=\\small}, label style={font=\\small},\n"
      "      title style={font=\\small\\itshape},\n"
      "    ]\n"
-     "    \\addplot[\n"
-     "      fill=blue!40!black,\n"
-     "      draw=blue!40!black,\n"
+     "    \\addplot[fill=blue!40!black, draw=blue!40!black,\n"
      "      error bars/.cd, x dir=both, x explicit\n"
      "    ] coordinates {\n"
      (str/join "\n"
@@ -183,52 +158,35 @@
      "  \\end{tikzpicture}\n"
      "  \\vspace{0.5em}\n"
      "  \\begin{minipage}{0.85\\textwidth}\n"
-     "    \\centering\n"
-     "    \\small\n"
+     "    \\centering \\small\n"
      "    \\begin{tabular}{@{}r l@{}}\n"
      (str/join "\n"
                (map-indexed
                 (fn [i s]
-                  (format "      (\\romannumeral %d) & %s \\\\" (inc i) (:label s)))
+                  (format "      (\\romannumeral %d) & %s \\\\" (inc i) (tex-safe (:label s))))
                 scenarios))
      "\n    \\end{tabular}\n"
      "  \\end{minipage}\n"
-     "  \\caption{" title "}\n"
+     "  \\caption{" (tex-safe title) "}\n"
      "  \\label{fig:" label "}\n"
      "\\end{figure}\n")))
 
 (defn- build-pgf-tex [throughput criterium bank]
   (str
    "% Generated by opusdb.benchmark.report\n"
-   "% Required packages in your preamble:\n"
-   "%   \\usepackage{pgfplots}\n"
-   "%   \\pgfplotsset{compat=1.18}\n\n"
-
+   "% Required packages: \\usepackage{pgfplots} \\pgfplotsset{compat=1.18}\n\n"
    (when throughput
      (str/join "\n"
                (for [[k stem caption] throughput-charts
                      :let  [data (get throughput k)]
                      :when (seq data)]
-                 (pgf-throughput-chart data caption stem))))
-
-   (when throughput
-     (str/join "\n"
-               (for [[k stem caption] throughput-charts
-                     :let  [data   (get throughput k)
-                            s-stem (str stem "-scaling")
-                            s-cap  (str/replace caption "Throughput" "Scalability")]
-                     :when (seq data)]
-                 (pgf-scalability-chart data s-cap s-stem))))
-
+                 (str (pgf-throughput-chart data caption stem)
+                      "\n"
+                      (pgf-scalability-chart data caption stem))))) ;; <-- Now using scalability chart!
    (when (seq criterium)
-     (pgf-latency-chart criterium
-                        "Transaction Latency --- opusdb STM"
-                        "latency-criterium"))
-
+     (pgf-latency-chart criterium "Transaction Latency: opusdb STM" "latency-criterium"))
    (when (seq (:scenarios bank))
-     (pgf-bank-latency-chart (:scenarios bank)
-                             "Bank Transfer Latency by Contention Level"
-                             "bank-contention-latency"))))
+     (pgf-bank-latency-chart (:scenarios bank) "Bank Transfer Latency" "bank-contention-latency"))))
 
 (defn generate-pgf!
   ([stdout output-dir]
@@ -239,22 +197,16 @@
    (let [{:keys [throughput criterium bank]} (parse/parse-all stdout)
          json-path (str output-dir "/bench-data.json")]
      (spit json-path (json/generate-string
-                      {:throughput throughput
-                       :criterium  criterium
-                       :bank       bank}
+                      {:throughput throughput :criterium criterium :bank bank}
                       {:pretty true}))
-     (println "  wrote:" json-path)
      (spit latex-file (build-pgf-tex throughput criterium bank))
-     (println "  wrote:" latex-file))))
-
-(defn generate-pgf-from-file!
-  ([input-file output-dir]
-   (generate-pgf-from-file! input-file output-dir {}))
-  ([input-file output-dir opts]
-   (generate-pgf! (slurp input-file) output-dir opts)))
+     (println "  Generated JSON and LaTeX report in:" output-dir))))
 
 (defn capture-and-generate-pgf!
+  "Runs the benchmark thunk, captures stdout, and generates reports."
   ([bench-thunk output-dir]
    (capture-and-generate-pgf! bench-thunk output-dir {}))
   ([bench-thunk output-dir opts]
-   (generate-pgf! (with-out-str (bench-thunk)) output-dir opts)))
+   (println "  (Capturing output... this will take a few minutes)")
+   (let [captured-output (with-out-str (bench-thunk))]
+     (generate-pgf! captured-output output-dir opts))))

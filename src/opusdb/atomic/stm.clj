@@ -21,7 +21,6 @@
 (def ^{:dynamic true} *tx* nil)
 
 ;; Transaction lifecycle
-
 (defn- make-tx [retry-count]
   (let [id (.incrementAndGet tx-counter)
         tx {:id          id
@@ -46,7 +45,6 @@
     (make-tx (inc retries))))
 
 ;; Abort signalling
-
 (defn- abort []
   (throw (ex-info "Transaction retry" {:type ::aborted})))
 
@@ -55,7 +53,6 @@
     (abort)))
 
 ;; History
-
 (defn- find-entry [read-point history]
   (loop [i (dec (count history))]
     (when (>= i 0)
@@ -70,7 +67,6 @@
     history))
 
 ;; Ref
-
 (defn ref [initial-val]
   (let [wp    (.get write-point)
         entry {:value initial-val :write-point wp}]
@@ -81,7 +77,6 @@
            :lock        (Object.)})))
 
 ;; Ownership
-
 (defn- try-acquire! [target-ref tx]
   (let [claimer-id (:id tx)
         lock       (:lock @target-ref)]
@@ -107,14 +102,12 @@
         (monitor-exit lock)))))
 
 ;; Validation
-
 (defn- validate-reads! [^IdentityHashMap read-set]
   (doseq [[r entry] read-set]
     (when (> (:write-point @r) (:write-point entry))
       (abort))))
 
 ;; Commit
-
 (defn- apply-writes! [^IdentityHashMap write-set]
   (let [commit-point (.incrementAndGet write-point)]
     (doseq [[r new-val] write-set]
@@ -141,7 +134,6 @@
     (tx/commit! id)))
 
 ;; Execution loop
-
 (defn- run-attempt [tx body-fn]
   (try
     (binding [*tx* tx]
@@ -166,7 +158,6 @@
                        (throw value))))))
 
 ;; Public API
-
 (defn sync [body-fn]
   (if *tx*
     (body-fn)

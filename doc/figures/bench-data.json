@@ -1,61 +1,69 @@
 {
   "throughput" : {
     "High Contention (single ref)" : [ {
-      "opusdb" : 178867,
+      "opusdb" : 241139,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 317161,
+      "opusdb" : 434092,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 475822,
+      "opusdb" : 463494,
       "correct?" : true,
       "threads" : 16
     } ],
     "Low Contention (isolated refs)" : [ {
-      "opusdb" : 1176045,
+      "opusdb" : 1296676,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1110739,
+      "opusdb" : 1272085,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 1276064,
+      "opusdb" : 1240818,
       "correct?" : true,
       "threads" : 16
     } ],
     "Bank Transfer (20 accounts)" : [ {
-      "opusdb" : 245018,
+      "opusdb" : 284690,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 116429,
+      "opusdb" : 199225,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 133050,
+      "opusdb" : 144359,
       "correct?" : true,
       "threads" : 16
     } ],
     "Read-Heavy Mix (10% writes, 10 refs)" : [ {
-      "opusdb" : 1232463,
+      "opusdb" : 1328380,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1566644,
+      "opusdb" : 1784967,
       "correct?" : true,
       "threads" : 8
+    }, {
+      "opusdb" : 1426312,
+      "correct?" : true,
+      "threads" : 16
     } ],
     "Write-Heavy Mix (90% writes, 10 refs)" : [ {
-      "opusdb" : 473386,
+      "opusdb" : 493138,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 306204,
+      "opusdb" : 271648,
       "correct?" : true,
       "threads" : 8
+    }, {
+      "opusdb" : 178398,
+      "correct?" : true,
+      "threads" : 16
     } ]
   },
   "criterium" : null,
@@ -65,26 +73,26 @@
       "actual" : 10000,
       "correct?" : true
     },
-    "total-transfers" : 2012221,
+    "total-transfers" : 687071,
     "scenarios" : [ {
-      "mean" : 2.287301,
-      "std" : 0.080176582,
+      "mean" : 2.142166,
+      "std" : 0.08287623200000001,
       "label" : "single transfer transaction"
     }, {
-      "mean" : 2.323837,
-      "std" : 0.041536251999999996,
+      "mean" : 2.219553,
+      "std" : 0.158928263,
       "label" : "low-contention concurrent transfers"
     }, {
-      "mean" : 2.272812,
-      "std" : 0.041571577,
+      "mean" : 2.152211,
+      "std" : 0.19158949,
       "label" : "medium-contention scenario"
     }, {
-      "mean" : 2.321377,
-      "std" : 0.071570914,
+      "mean" : 2.203989,
+      "std" : 0.203867831,
       "label" : "high-contention scenario"
     }, {
-      "mean" : 3354.9159999999997,
-      "std" : 575.844123,
+      "mean" : 805.925812,
+      "std" : 115.681938,
       "label" : "extreme-contention with futures"
     } ]
   }
