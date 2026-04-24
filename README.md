@@ -2,7 +2,7 @@
 
 An Experimental Relational Database for Academic Research in Clojure.
 
-<img width="480" height="480" alt="logo" src="https://github.com/user-attachments/assets/ba51138f-7354-4ffd-bb7c-4a53847ca7a1" />
+<img width="480" height="480" alt="opusdb_logo_v4" src="https://github.com/user-attachments/assets/13578c35-8b05-4b83-8903-e9f78c7cbd1c" />
 
 ## Table of Contents
 
