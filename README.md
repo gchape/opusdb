@@ -10,7 +10,6 @@ An Experimental Relational Database for Academic Research in Clojure.
 - [Benchmarks](#benchmarks)
   - [Bank Transfer Benchmarks](#bank-transfer-benchmarks)
   - [Throughput Benchmarks](#throughput-benchmarks)
-  - [Native STM Comparison](#native-stm-comparison)
 - [API Reference](#api-reference)
 - [Contributing](#contributing)
 - [License](#license)
@@ -29,7 +28,7 @@ Real-world financial transaction simulation testing atomicity and consistency un
 
 #### Test Configuration
 
-Ten accounts, each initialised with 1,000 units. Transfers are atomic transactions that read balances, verify funds, update both accounts, and increment a transfer counter. The STM guarantees all-or-nothing execution, preventing partial transfers or lost updates.
+Ten accounts, each initialised with 1,000 units. Transfers are atomic transactions that read balances, verify funds, update both accounts, and increment a transfer counter via `on-commit` hook. The STM guarantees all-or-nothing execution, preventing partial transfers or lost updates.
 
 #### Test Scenarios
 
@@ -46,68 +45,72 @@ Ten accounts, each initialised with 1,000 units. Transfers are atomic transactio
 
 ```
 === BANK TRANSFERS ===
-Total (should be 10000): 10000
-Successful transfers: 1989346
+Total (should be 10000 ): 10000
+Successful transfers: 542858
 
 Benchmarking single transfer transaction:
-Evaluation count : 278160 in 6 samples of 46360 calls.
-             Execution time mean : 2.226707 µs
-    Execution time std-deviation : 58.027795 ns
-   Execution time lower quantile : 2.158768 µs ( 2.5%)
-   Execution time upper quantile : 2.309807 µs (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 304242 in 6 samples of 50707 calls.
+             Execution time mean : 2.029188 µs
+    Execution time std-deviation : 146.741959 ns
+   Execution time lower quantile : 1.887760 µs ( 2.5%)
+   Execution time upper quantile : 2.199594 µs (97.5%)
+                   Overhead used : 2.032557 ns
+
+Benchmarking low-contention concurrent transfers:
+(Rotating through different account pairs)
+Evaluation count : 295398 in 6 samples of 49233 calls.
+             Execution time mean : 2.099264 µs
+    Execution time std-deviation : 60.774061 ns
+   Execution time lower quantile : 2.038572 µs ( 2.5%)
+   Execution time upper quantile : 2.192463 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Found 1 outliers in 6 samples (16.6667 %)
         low-severe       1 (16.6667 %)
  Variance from outliers : 13.8889 % Variance is moderately inflated by outliers
 
-Benchmarking low-contention concurrent transfers:
-(Rotating through different account pairs)
-Evaluation count : 274746 in 6 samples of 45791 calls.
-             Execution time mean : 2.281300 µs
-    Execution time std-deviation : 67.210583 ns
-   Execution time lower quantile : 2.227851 µs ( 2.5%)
-   Execution time upper quantile : 2.384188 µs (97.5%)
-                   Overhead used : 2.037598 ns
-
 Benchmarking medium-contention scenario:
 (All transfers touching accounts 0-4)
-Evaluation count : 265344 in 6 samples of 44224 calls.
-             Execution time mean : 2.315170 µs
-    Execution time std-deviation : 77.470009 ns
-   Execution time lower quantile : 2.236750 µs ( 2.5%)
-   Execution time upper quantile : 2.428696 µs (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 304680 in 6 samples of 50780 calls.
+             Execution time mean : 2.057422 µs
+    Execution time std-deviation : 107.990063 ns
+   Execution time lower quantile : 1.961023 µs ( 2.5%)
+   Execution time upper quantile : 2.224575 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Benchmarking high-contention scenario:
 (All transfers between accounts 0 and 1)
-Evaluation count : 271194 in 6 samples of 45199 calls.
-             Execution time mean : 2.309667 µs
-    Execution time std-deviation : 78.939990 ns
-   Execution time lower quantile : 2.243977 µs ( 2.5%)
-   Execution time upper quantile : 2.430316 µs (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 299142 in 6 samples of 49857 calls.
+             Execution time mean : 2.136859 µs
+    Execution time std-deviation : 127.840159 ns
+   Execution time lower quantile : 2.019817 µs ( 2.5%)
+   Execution time upper quantile : 2.303959 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Benchmarking extreme-contention with futures:
 (20 threads all transferring from/to same 2 accounts)
-Evaluation count : 402 in 6 samples of 67 calls.
-             Execution time mean : 1.717133 ms
-    Execution time std-deviation : 97.714707 µs
-   Execution time lower quantile : 1.609434 ms ( 2.5%)
-   Execution time upper quantile : 1.826020 ms (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 990 in 6 samples of 165 calls.
+             Execution time mean : 813.164454 µs
+    Execution time std-deviation : 105.108940 µs
+   Execution time lower quantile : 691.146261 µs ( 2.5%)
+   Execution time upper quantile : 974.551748 µs (97.5%)
+                   Overhead used : 2.032557 ns
+
+Found 1 outliers in 6 samples (16.6667 %)
+        low-severe       1 (16.6667 %)
+ Variance from outliers : 31.6015 % Variance is moderately inflated by outliers
 ```
 
 #### Summary
 
-| Scenario                        | Mean Latency | Throughput          |
-| ------------------------------- | ------------ | ------------------- |
-| Single transfer                 | 2.23 µs      | —                   |
-| Low-contention                  | 2.28 µs      | —                   |
-| Medium-contention               | 2.32 µs      | —                   |
-| High-contention                 | 2.31 µs      | —                   |
-| Extreme-contention (20 futures) | 1.72 ms      | —                   |
-| Stress test (20 threads, 5s)    | —            | 1,989,346 transfers |
+| Scenario                        | Mean Latency | Throughput        |
+| ------------------------------- | ------------ | ----------------- |
+| Single transfer                 | 2.03 µs      | —                 |
+| Low-contention                  | 2.10 µs      | —                 |
+| Medium-contention               | 2.06 µs      | —                 |
+| High-contention                 | 2.14 µs      | —                 |
+| Extreme-contention (20 futures) | 813 µs       | —                 |
+| Stress test (20 threads, 5s)    | —            | 542,858 transfers |
 
 Zero data inconsistencies across all scenarios. Total balance invariant maintained throughout.
 
@@ -136,235 +139,119 @@ Comprehensive STM performance testing across workload patterns with thread scali
 --- High Contention (single ref) ---
 
   4 threads:
-  opusdb  txns/sec: 339950  correct: true
+  opusdb  txns/sec: 321715  correct: true
 
   8 threads:
-  opusdb  txns/sec: 357034  correct: true
+  opusdb  txns/sec: 379340  correct: true
 
   16 threads:
-  opusdb  txns/sec: 432081  correct: true
+  opusdb  txns/sec: 407955  correct: true
 
 --- Low Contention (isolated refs) ---
 
   4 threads:
-  opusdb  txns/sec: 833943  correct: true
+  opusdb  txns/sec: 1228010  correct: true
 
   8 threads:
-  opusdb  txns/sec: 767328  correct: true
+  opusdb  txns/sec: 1253084  correct: true
 
   16 threads:
-  opusdb  txns/sec: 1158596  correct: true
+  opusdb  txns/sec: 1163300  correct: true
 
 --- Bank Transfer (20 accounts) ---
 
   4 threads:
-  opusdb  txns/sec: 296916  correct: true
+  opusdb  txns/sec: 375293  correct: true
 
   8 threads:
-  opusdb  txns/sec: 116288  correct: true
+  opusdb  txns/sec: 148432  correct: true
 
   16 threads:
-  opusdb  txns/sec: 101728  correct: true
+  opusdb  txns/sec: 137998  correct: true
 
 --- Read-Heavy Mix (10% writes, 10 refs) ---
 
   4 threads:
-  opusdb  txns/sec: 1060610  correct: true
+  opusdb  txns/sec: 902827  correct: true
 
   8 threads:
-  opusdb  txns/sec: 1456467  correct: true
+  opusdb  txns/sec: 2096313  correct: true
+
+  16 threads:
+  opusdb  txns/sec: 1558007  correct: true
 
 --- Write-Heavy Mix (90% writes, 10 refs) ---
 
   4 threads:
-  opusdb  txns/sec: 420145  correct: true
+  opusdb  txns/sec: 436538  correct: true
 
   8 threads:
-  opusdb  txns/sec: 271186  correct: true
+  opusdb  txns/sec: 266945  correct: true
+
+  16 threads:
+  opusdb  txns/sec: 113074  correct: true
 ```
 
 #### Criterium Statistical Benchmarks
 
 ```
 Single increment — opusdb:
-Evaluation count : 522468 in 6 samples of 87078 calls.
-             Execution time mean : 1.195893 µs
-    Execution time std-deviation : 38.364063 ns
-   Execution time lower quantile : 1.143009 µs ( 2.5%)
-   Execution time upper quantile : 1.238103 µs (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 461892 in 6 samples of 76982 calls.
+             Execution time mean : 1.282516 µs
+    Execution time std-deviation : 31.923214 ns
+   Execution time lower quantile : 1.228732 µs ( 2.5%)
+   Execution time upper quantile : 1.314263 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Single ref-set — opusdb:
-Evaluation count : 649356 in 6 samples of 108226 calls.
-             Execution time mean : 948.088967 ns
-    Execution time std-deviation : 32.831345 ns
-   Execution time lower quantile : 916.947074 ns ( 2.5%)
-   Execution time upper quantile : 999.723314 ns (97.5%)
-                   Overhead used : 2.037598 ns
-
-Found 1 outliers in 6 samples (16.6667 %)
-        low-severe       1 (16.6667 %)
- Variance from outliers : 13.8889 % Variance is moderately inflated by outliers
+Evaluation count : 585174 in 6 samples of 97529 calls.
+             Execution time mean : 1.026886 µs
+    Execution time std-deviation : 37.358346 ns
+   Execution time lower quantile : 984.148428 ns ( 2.5%)
+   Execution time upper quantile : 1.071615 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Read-only 5 refs — opusdb:
-Evaluation count : 618246 in 6 samples of 103041 calls.
-             Execution time mean : 977.382602 ns
-    Execution time std-deviation : 29.236433 ns
-   Execution time lower quantile : 948.148038 ns ( 2.5%)
-   Execution time upper quantile : 1.008833 µs (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 591780 in 6 samples of 98630 calls.
+             Execution time mean : 1.109876 µs
+    Execution time std-deviation : 51.566390 ns
+   Execution time lower quantile : 1.055797 µs ( 2.5%)
+   Execution time upper quantile : 1.157703 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Read-only 10 refs — opusdb:
-Evaluation count : 410340 in 6 samples of 68390 calls.
-             Execution time mean : 1.416513 µs
-    Execution time std-deviation : 47.489930 ns
-   Execution time lower quantile : 1.380883 µs ( 2.5%)
-   Execution time upper quantile : 1.492322 µs (97.5%)
-                   Overhead used : 2.037598 ns
-
-Found 1 outliers in 6 samples (16.6667 %)
-        low-severe       1 (16.6667 %)
- Variance from outliers : 13.8889 % Variance is moderately inflated by outliers
+Evaluation count : 406830 in 6 samples of 67805 calls.
+             Execution time mean : 1.557434 µs
+    Execution time std-deviation : 30.515230 ns
+   Execution time lower quantile : 1.529976 µs ( 2.5%)
+   Execution time upper quantile : 1.604886 µs (97.5%)
+                   Overhead used : 2.032557 ns
 
 Write 5 refs — opusdb:
-Evaluation count : 185784 in 6 samples of 30964 calls.
-             Execution time mean : 3.338396 µs
-    Execution time std-deviation : 40.997854 ns
-   Execution time lower quantile : 3.292780 µs ( 2.5%)
-   Execution time upper quantile : 3.390519 µs (97.5%)
-                   Overhead used : 2.037598 ns
+Evaluation count : 175032 in 6 samples of 29172 calls.
+             Execution time mean : 3.728842 µs
+    Execution time std-deviation : 106.124248 ns
+   Execution time lower quantile : 3.610080 µs ( 2.5%)
+   Execution time upper quantile : 3.838749 µs (97.5%)
+                   Overhead used : 2.032557 ns
 ```
 
 #### Summary
 
 | Operation         | Mean Latency |
 | ----------------- | ------------ |
-| Single ref-set    | 948 ns       |
-| Single increment  | 1.20 µs      |
-| Read-only 5 refs  | 977 ns       |
-| Read-only 10 refs | 1.42 µs      |
-| Write 5 refs      | 3.34 µs      |
+| Single ref-set    | 1.03 µs      |
+| Single increment  | 1.28 µs      |
+| Read-only 5 refs  | 1.11 µs      |
+| Read-only 10 refs | 1.56 µs      |
+| Write 5 refs      | 3.73 µs      |
 
-| Scenario                     | Throughput (txns/sec) |
-| ---------------------------- | --------------------- |
-| Low contention (16 threads)  | 1.16M                 |
-| High contention (16 threads) | 432k                  |
-| Read-heavy mix (8 threads)   | 1.46M                 |
-| Bank transfer (4 threads)    | 297k                  |
-
----
-
-### Native STM Comparison
-
-OpusDB STM is implemented entirely at the application level in Clojure, without modifications to the language runtime. This section compares it directly against Clojure's native `dosync` / `LockingTransaction` under identical workloads.
-
-#### Results
-
-```
-=== Throughput Benchmarks ===
-
---- High Contention (single ref) ---
-
-  4 threads:
-  opusdb       txns/sec: 204810  correct: true
-  native       txns/sec: 273522  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 289789  correct: true
-  native       txns/sec: 246724  correct: true
-
-  16 threads:
-  opusdb       txns/sec: 398263  correct: true
-  native       txns/sec: 682076  correct: true
-
---- Low Contention (isolated refs) ---
-
-  4 threads:
-  opusdb       txns/sec: 883499   correct: true
-  native       txns/sec: 7802013  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 991292    correct: true
-  native       txns/sec: 14462260  correct: true
-
-  16 threads:
-  opusdb       txns/sec: 1158357   correct: true
-  native       txns/sec: 14588923  correct: true
-
---- Bank Transfer (20 accounts) ---
-
-  4 threads:
-  opusdb       txns/sec: 203158  correct: true
-  native       txns/sec: 440438  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 238011   correct: true
-  native       txns/sec: 1832418  correct: true
-
-  16 threads:
-  opusdb       txns/sec: 265853   correct: true
-  native       txns/sec: 1261212  correct: true
-
---- Read-Heavy Mix (10% writes, 10 refs) ---
-
-  4 threads:
-  opusdb       txns/sec: 913282   correct: true
-  native       txns/sec: 2437521  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 922852   correct: true
-  native       txns/sec: 3068383  correct: true
-
---- Write-Heavy Mix (90% writes, 10 refs) ---
-
-  4 threads:
-  opusdb       txns/sec: 683098   correct: true
-  native       txns/sec: 3559115  correct: true
-
-  8 threads:
-  opusdb       txns/sec: 485099   correct: true
-  native       txns/sec: 3195161  correct: true
-
-=== Criterium Statistical Benchmarks ===
-
-Single increment — opusdb:   1.229 µs
-Single increment — native:   213 ns
-
-Single ref-set — opusdb:     909 ns
-Single ref-set — native:     240 ns
-
-Read-only 5 refs — opusdb:   1.188 µs
-Read-only 5 refs — native:   421 ns
-
-Read-only 10 refs — opusdb:  1.636 µs
-Read-only 10 refs — native:  538 ns
-
-Write 5 refs — opusdb:       3.543 µs
-Write 5 refs — native:       623 ns
-```
-
-#### Analysis
-
-| Scenario                   | OpusDB   | Native   | Ratio           |
-| -------------------------- | -------- | -------- | --------------- |
-| Single increment           | 1.23 µs  | 213 ns   | ~5.8x           |
-| Single ref-set             | 909 ns   | 240 ns   | ~3.8x           |
-| Read-only 5 refs           | 1.19 µs  | 421 ns   | ~2.8x           |
-| Write 5 refs               | 3.54 µs  | 623 ns   | ~5.7x           |
-| High contention, 8 threads | 289k tps | 247k tps | **OpusDB +17%** |
-
-The performance gap on uncontended workloads is expected and attributable to implementation level: Clojure's native STM is a JVM-optimised Java implementation (`LockingTransaction.java`) with direct field access, lock striping, and years of JIT optimisation. OpusDB STM operates entirely in Clojure, paying for `IdentityHashMap` operations, `volatile!` reads, and atom CAS on every ref write.
-
-Notably, at 8-thread high contention, OpusDB outperforms native STM. This is the ownership-stealing conflict resolution protocol working as intended — higher transaction IDs steal ownership and immediately abort lower-priority transactions, reducing the retry cycles that native STM's backoff strategy incurs under sustained contention.
-
-The throughput overhead is a deliberate tradeoff. OpusDB STM provides capabilities the native implementation cannot:
-
-- `on-commit` handlers — side effects deferred until successful commit
-- `on-rollback` handlers — cleanup guaranteed on abort or retry
-- A fully public API with no package-private visibility restrictions
-- Runtime independence — no forking or patching of `clojure.lang`
-
----
+| Scenario                      | Throughput (txns/sec) |
+| ----------------------------- | --------------------- |
+| Low contention (4–16 threads) | 1.1M–1.2M             |
+| High contention (16 threads)  | 408k                  |
+| Read-heavy mix (8 threads)    | 2.1M                  |
+| Bank transfer (4 threads)     | 375k                  |
 
 ## License
 
