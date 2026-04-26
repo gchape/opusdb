@@ -16,15 +16,6 @@
          :jvm-opts ["-XX:+UnlockDiagnosticVMOptions"
                     "-XX:+DebugNonSafepoints"]}
 
-   :bench {:dependencies [[criterium "0.4.6"]]
-           :jvm-opts ["-Dclojure.compiler.direct-linking=true"
-                      "-Xms4g"
-                      "-Xmx4g"
-                      "-XX:+UseG1GC"
-                      "-XX:+UnlockDiagnosticVMOptions"
-                      "-XX:+DebugNonSafepoints"]
-           :global-vars {*warn-on-reflection* true}}
-
    :prod {:aot :all
           :jvm-opts ["-Dclojure.compiler.direct-linking=true"
                      "-XX:+UseG1GC"
