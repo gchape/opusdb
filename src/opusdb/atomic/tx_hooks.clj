@@ -2,26 +2,24 @@
   (:import
    [java.util.concurrent ConcurrentHashMap]))
 
-(def ^:private ^ConcurrentHashMap COMMIT_EVENTS (ConcurrentHashMap.))
-(def ^:private ^ConcurrentHashMap ROLLBACK_EVENTS (ConcurrentHashMap.))
+(def ^:private ^ConcurrentHashMap EVENT_REGISTRAR (ConcurrentHashMap.))
 
-(defn on-commit [id fun]
-  (.compute COMMIT_EVENTS id
-            (fn [_ fns]
-              (conj (or fns []) fun))))
+(defn on-commit [id fn]
+  (.compute EVENT_REGISTRAR (keyword "commit" (str id))
+            (fn* [_ fns]
+              (conj (or fns []) fn))))
 
-(defn on-rollback [id fun]
-  (.compute ROLLBACK_EVENTS id
-            (fn [_ fns]
-              (conj (or fns []) fun))))
+(defn on-rollback [id fn]
+  (.compute EVENT_REGISTRAR (keyword "rollback" (str id))
+            (fn* [_ fns]
+              (conj (or fns []) fn))))
 
 (defn commit! [id]
-  (when-let [fns (.remove COMMIT_EVENTS id)]
-    (doseq [f fns]
-      (f))
-    (.remove ROLLBACK_EVENTS id)))
+  (when-let [fns (.remove EVENT_REGISTRAR (keyword "commit" (str id)))]
+    (doseq [fn fns]
+      (fn))))
 
 (defn rollback! [id]
-  (when-let [fns (.remove ROLLBACK_EVENTS id)]
-    (doseq [f fns]
-      (f))))
+  (when-let [fns (.remove EVENT_REGISTRAR (keyword "rollback" (str id)))]
+    (doseq [fn fns]
+      (fn))))
