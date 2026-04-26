@@ -1,67 +1,67 @@
 {
   "throughput" : {
     "High Contention (single ref)" : [ {
-      "opusdb" : 241139,
+      "opusdb" : 317658,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 434092,
+      "opusdb" : 405558,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 463494,
+      "opusdb" : 566566,
       "correct?" : true,
       "threads" : 16
     } ],
     "Low Contention (isolated refs)" : [ {
-      "opusdb" : 1296676,
+      "opusdb" : 1181429,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1272085,
+      "opusdb" : 1194766,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 1240818,
+      "opusdb" : 691887,
       "correct?" : true,
       "threads" : 16
     } ],
     "Bank Transfer (20 accounts)" : [ {
-      "opusdb" : 284690,
+      "opusdb" : 179863,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 199225,
+      "opusdb" : 101783,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 144359,
+      "opusdb" : 190902,
       "correct?" : true,
       "threads" : 16
     } ],
     "Read-Heavy Mix (10% writes, 10 refs)" : [ {
-      "opusdb" : 1328380,
+      "opusdb" : 1544156,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1784967,
+      "opusdb" : 2621760,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 1426312,
+      "opusdb" : 2257369,
       "correct?" : true,
       "threads" : 16
     } ],
     "Write-Heavy Mix (90% writes, 10 refs)" : [ {
-      "opusdb" : 493138,
+      "opusdb" : 738136,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 271648,
+      "opusdb" : 530892,
       "correct?" : true,
       "threads" : 8
     }, {
-      "opusdb" : 178398,
+      "opusdb" : 585255,
       "correct?" : true,
       "threads" : 16
     } ]
@@ -73,26 +73,26 @@
       "actual" : 10000,
       "correct?" : true
     },
-    "total-transfers" : 687071,
+    "total-transfers" : 1231901,
     "scenarios" : [ {
-      "mean" : 2.142166,
-      "std" : 0.08287623200000001,
+      "mean" : 1.754669,
+      "std" : 0.020638243,
       "label" : "single transfer transaction"
     }, {
-      "mean" : 2.219553,
-      "std" : 0.158928263,
+      "mean" : 1.809685,
+      "std" : 0.034133673999999996,
       "label" : "low-contention concurrent transfers"
     }, {
-      "mean" : 2.152211,
-      "std" : 0.19158949,
+      "mean" : 1.743227,
+      "std" : 0.021158154,
       "label" : "medium-contention scenario"
     }, {
-      "mean" : 2.203989,
-      "std" : 0.203867831,
+      "mean" : 1.76768,
+      "std" : 0.027939029,
       "label" : "high-contention scenario"
     }, {
-      "mean" : 805.925812,
-      "std" : 115.681938,
+      "mean" : 980.666102,
+      "std" : 79.896121,
       "label" : "extreme-contention with futures"
     } ]
   }
