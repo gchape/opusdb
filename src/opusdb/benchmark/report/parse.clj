@@ -24,7 +24,15 @@
 (def ^:private re-top-header    #"(?m)^===\s+(.+?)\s+===\s*$")
 (def ^:private re-sec-header    #"(?m)^---\s+(.+?)\s+---\s*$")
 (def ^:private re-threads       #"^\s*(\d+)\s+threads:\s*$")
-(def ^:private re-impl-line     #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+correct:\s+(true|false)")
+
+;; Two variants of the impl line:
+;;   plain:   opusdb  txns/sec: 123456  correct: true
+;;   counted: opusdb  txns/sec: 123456  aborts/commit: 3.21  correct: true
+(def ^:private re-impl-plain
+  #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+correct:\s+(true|false)")
+(def ^:private re-impl-counted
+  #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+aborts/commit:\s+([\d.]+)\s+correct:\s+(true|false)")
+
 (def ^:private re-crit-label    #"^(.+?)\s*—\s*opusdb:\s*$")
 
 ;; Criterium output can vary slightly between versions; \s* instead of fixed spaces
@@ -55,11 +63,22 @@
                    (conj (assoc cur-vals :threads cur-threads)))]
         (recur rest n {} acc'))
 
-      (re-find re-impl-line line)
-      (let [[_ tps correct] (re-find re-impl-line line)]
+      ;; Counted line (has aborts/commit) — must be tested before plain
+      ;; because plain regex would also match the prefix of a counted line.
+      (re-find re-impl-counted line)
+      (let [[_ tps aborts correct] (re-find re-impl-counted line)]
         (recur rest cur-threads
                (assoc cur-vals
-                      :opusdb (->long tps)
+                      :opusdb          (->long tps)
+                      :aborts-per-commit (->double aborts)
+                      :correct?        (= correct "true"))
+               acc))
+
+      (re-find re-impl-plain line)
+      (let [[_ tps correct] (re-find re-impl-plain line)]
+        (recur rest cur-threads
+               (assoc cur-vals
+                      :opusdb   (->long tps)
                       :correct? (= correct "true"))
                acc))
 

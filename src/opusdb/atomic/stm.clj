@@ -20,7 +20,6 @@
 
 (def ^{:dynamic true} *tx* nil)
 
-;; Transaction lifecycle
 (defn- make-tx [retry-count]
   (let [id (.incrementAndGet tx-counter)
         tx {:id          id
@@ -38,22 +37,24 @@
   (let [retries (:retry-count current)]
     (when (>= retries max-retries)
       (throw (ex-info "STM exceeded max retries" {:retries retries})))
+    ;; Exponential backoff with ±25% jitter after 4 retries.
     (when (> retries 4)
       (let [base   (min max-sleep-ms (bit-shift-left base-sleep-ms (min (- retries 4) 6)))
             jitter (long (* base 0.25 (- (* 2 (.nextDouble (ThreadLocalRandom/current))) 1)))]
         (Thread/sleep (max 0 (long (+ base jitter))))))
     (make-tx (inc retries))))
 
-;; Abort signalling
 (defn- abort []
+  ;; Sentinel exception — caught by run-attempt to trigger a retry.
   (throw (ex-info "Transaction retry" {:type ::aborted})))
 
 (defn- check-active! [tx]
+  ;; Bail early if wait-die has already marked us aborted.
   (when (= @(:status tx) ::aborted)
     (abort)))
 
-;; History
 (defn- find-entry [read-point history]
+  ;; Newest-first scan; returns the latest entry visible at read-point.
   (loop [i (dec (count history))]
     (when (>= i 0)
       (let [entry (nth history i)]
@@ -62,12 +63,13 @@
           (recur (dec i)))))))
 
 (defn- trim-history [history]
+  ;; Bound per-ref memory; dropping old versions only affects very long-lived readers.
   (if (> (count history) max-history)
     (vec (take-last max-history history))
     history))
 
-;; Ref
 (defn ref [initial-val]
+  ;; Wraps value + version history + write-lock owner in a single atom.
   (let [wp    (.get write-point)
         entry {:value initial-val :write-point wp}]
     (atom {:value       initial-val
@@ -76,8 +78,9 @@
            :owner       nil
            :lock        (Object.)})))
 
-;; Ownership
 (defn- try-acquire! [target-ref tx]
+  ;; Claims write ownership under the ref's own lock (not commit-lock).
+  ;; Wait-die: younger tx (higher ID) preempts the owner; older tx yields.
   (let [claimer-id (:id tx)
         lock       (:lock @target-ref)]
     (monitor-enter lock)
@@ -90,6 +93,7 @@
           (= owner-id claimer-id)
           true
 
+          ;; We're younger — preempt the owner and steal the ref.
           (> claimer-id owner-id)
           (do (when-some [owner-tx (.get active-tx owner-id)]
                 (when (= @(:status owner-tx) ::active)
@@ -97,18 +101,18 @@
               (swap! target-ref assoc :owner claimer-id)
               true)
 
-          :else false))
+          :else false)) ; we're older — yield, let the younger owner finish
       (finally
         (monitor-exit lock)))))
 
-;; Validation
 (defn- validate-reads! [^IdentityHashMap read-set]
+  ;; Called inside commit-lock; aborts if any read ref was written since our snapshot.
   (doseq [[r entry] read-set]
     (when (> (:write-point @r) (:write-point entry))
       (abort))))
 
-;; Commit
 (defn- apply-writes! [^IdentityHashMap write-set]
+  ;; Advance write-point once, then stamp all writes with that commit-point.
   (let [commit-point (.incrementAndGet write-point)]
     (doseq [[r new-val] write-set]
       (swap! r (fn [{:keys [history] :as state}]
@@ -124,6 +128,7 @@
 (defn- commit! [tx]
   (check-active! tx)
   (let [{:keys [id read-set write-set status]} tx]
+    ;; Read-only txs skip the commit-lock entirely.
     (when (seq write-set)
       (locking commit-lock
         (check-active! tx)
@@ -133,7 +138,6 @@
     (.remove active-tx id)
     (tx/commit! id)))
 
-;; Execution loop
 (defn- run-attempt [tx body-fn]
   (try
     (binding [*tx* tx]
@@ -141,6 +145,7 @@
         (commit! tx)
         [:ok result]))
     (catch clojure.lang.ExceptionInfo ex
+      ;; ::aborted is ours — retry. All other ExceptionInfo propagates.
       (if (= (:type (ex-data ex)) ::aborted)
         [:abort nil]
         [:exception ex]))
@@ -157,8 +162,8 @@
                        (.remove active-tx (:id tx))
                        (throw value))))))
 
-;; Public API
 (defn sync [body-fn]
+  ;; Already in a tx — participate directly; STM transactions are flat.
   (if *tx*
     (body-fn)
     (run-tx body-fn)))
@@ -167,6 +172,7 @@
   `(sync (fn* [] ~@body)))
 
 (defn deref [target-ref]
+  ;; Outside tx: current committed value. Inside: write-set → read-set → history snapshot.
   (if-not *tx*
     (:value @target-ref)
     (let [tx                          *tx*
@@ -182,6 +188,7 @@
 
         :else
         (let [snapshot (find-entry (:read-point tx) (:history @target-ref))]
+          ;; Ref created after our snapshot and history already trimmed — abort.
           (when-not snapshot (abort))
           (.put read-set target-ref snapshot)
           (:value snapshot))))))
@@ -191,6 +198,7 @@
     (throw (IllegalStateException. "ref-set outside transaction")))
   (let [tx *tx*]
     (check-active! tx)
+    ;; Acquire before buffering; yields if wait-die determines we're older.
     (when-not (try-acquire! target-ref tx)
       (abort))
     (.put ^IdentityHashMap (:write-set tx) target-ref new-val)
@@ -200,11 +208,13 @@
   (ref-set target-ref (apply f (deref target-ref) args)))
 
 (defn on-commit [handler]
+  ;; Side-effect guaranteed to run once, after commit — safe for LongAdder etc.
   (if *tx*
     (tx/on-commit (:id *tx*) handler)
     (throw (IllegalStateException. "on-commit outside transaction"))))
 
 (defn on-rollback [handler]
+  ;; Cleanup hook run on abort or retry.
   (if *tx*
     (tx/on-rollback (:id *tx*) handler)
     (throw (IllegalStateException. "on-rollback outside transaction"))))

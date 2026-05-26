@@ -22,10 +22,10 @@
                       "-Xms8g"
                       "-Xmx8g"
                       "-XX:+UseG1GC"
+                      "-XX:+AlwaysPreTouch"
                       "-XX:+UnlockDiagnosticVMOptions"
-                      "-XX:+DebugNonSafepoints"]
-           :global-vars {*warn-on-reflection* true}}
-
+                      "-XX:+DebugNonSafepoints"]}
+   
    :prod {:aot :all
           :jvm-opts ["-Dclojure.compiler.direct-linking=true"
                      "-XX:+UseG1GC"

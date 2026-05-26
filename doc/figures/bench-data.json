@@ -1,99 +1,126 @@
 {
   "throughput" : {
     "High Contention (single ref)" : [ {
-      "opusdb" : 317658,
+      "opusdb" : 191989,
+      "aborts-per-commit" : 0.0,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 405558,
+      "opusdb" : 313780,
+      "aborts-per-commit" : 0.0,
       "correct?" : true,
-      "threads" : 8
+      "threads" : 6
     }, {
-      "opusdb" : 566566,
+      "opusdb" : 398005,
+      "aborts-per-commit" : 0.07,
       "correct?" : true,
-      "threads" : 16
+      "threads" : 12
     } ],
     "Low Contention (isolated refs)" : [ {
-      "opusdb" : 1181429,
+      "opusdb" : 1145772,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1194766,
+      "opusdb" : 1243557,
       "correct?" : true,
-      "threads" : 8
+      "threads" : 6
     }, {
-      "opusdb" : 691887,
+      "opusdb" : 1360233,
       "correct?" : true,
-      "threads" : 16
+      "threads" : 12
     } ],
     "Bank Transfer (20 accounts)" : [ {
-      "opusdb" : 179863,
+      "opusdb" : 211423,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 101783,
+      "opusdb" : 171684,
       "correct?" : true,
-      "threads" : 8
+      "threads" : 6
     }, {
-      "opusdb" : 190902,
+      "opusdb" : 245861,
       "correct?" : true,
-      "threads" : 16
+      "threads" : 12
     } ],
     "Read-Heavy Mix (10% writes, 10 refs)" : [ {
-      "opusdb" : 1544156,
+      "opusdb" : 1454270,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 2621760,
+      "opusdb" : 1773016,
       "correct?" : true,
-      "threads" : 8
+      "threads" : 6
     }, {
-      "opusdb" : 2257369,
+      "opusdb" : 1525335,
       "correct?" : true,
-      "threads" : 16
+      "threads" : 12
     } ],
     "Write-Heavy Mix (90% writes, 10 refs)" : [ {
-      "opusdb" : 738136,
+      "opusdb" : 587219,
+      "aborts-per-commit" : 0.15,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 530892,
+      "opusdb" : 617315,
+      "aborts-per-commit" : 0.11,
       "correct?" : true,
-      "threads" : 8
+      "threads" : 6
     }, {
-      "opusdb" : 585255,
+      "opusdb" : 543641,
+      "aborts-per-commit" : 0.18,
       "correct?" : true,
-      "threads" : 16
+      "threads" : 12
     } ]
   },
-  "criterium" : null,
+  "criterium" : {
+    "Benchmarking single transfer transaction" : {
+      "mean" : 1.998736,
+      "std" : 0.02066381,
+      "lower" : 1.976859,
+      "upper" : 2.02807
+    },
+    "Benchmarking extreme-contention with futures" : {
+      "mean" : 287.701834,
+      "std" : 33.427868,
+      "lower" : 230.9493,
+      "upper" : 322.805712
+    },
+    "Benchmarking on-commit hook overhead (no hook baseline)" : {
+      "mean" : 1.876692,
+      "std" : 0.039043308000000006,
+      "lower" : 1.831068,
+      "upper" : 1.926441
+    },
+    "Benchmarking on-commit hook overhead (with hook)" : {
+      "mean" : 2.019284,
+      "std" : 0.033024484,
+      "lower" : 1.967795,
+      "upper" : 2.048991
+    }
+  },
   "bank" : {
     "integrity" : {
       "expected" : 10000,
       "actual" : 10000,
       "correct?" : true
     },
-    "total-transfers" : 1231901,
+    "total-transfers" : 1813153,
     "scenarios" : [ {
-      "mean" : 1.754669,
-      "std" : 0.020638243,
-      "label" : "single transfer transaction"
+      "mean" : 1.998736,
+      "std" : 0.02066381,
+      "label" : "single transfer transaction — opusdb"
     }, {
-      "mean" : 1.809685,
-      "std" : 0.034133673999999996,
-      "label" : "low-contention concurrent transfers"
+      "mean" : 287.701834,
+      "std" : 33.427868,
+      "label" : "extreme-contention with futures — opusdb"
     }, {
-      "mean" : 1.743227,
-      "std" : 0.021158154,
-      "label" : "medium-contention scenario"
+      "mean" : 1.876692,
+      "std" : 0.039043308000000006,
+      "label" : "on-commit hook overhead (no hook baseline) — opusdb"
     }, {
-      "mean" : 1.76768,
-      "std" : 0.027939029,
-      "label" : "high-contention scenario"
-    }, {
-      "mean" : 980.666102,
-      "std" : 79.896121,
-      "label" : "extreme-contention with futures"
+      "mean" : 2.019284,
+      "std" : 0.033024484,
+      "label" : "on-commit hook overhead (with hook) — opusdb"
     } ]
   }
 }
