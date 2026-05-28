@@ -1,7 +1,6 @@
 (ns opusdb.benchmark.bank
-  (:require
-   [criterium.core :as crit]
-   [opusdb.atomic.stm :as stm])
+  (:require [criterium.core :as crit]
+            [opusdb.atomic.stm :as stm])
   (:import
    [java.util.concurrent CountDownLatch ThreadLocalRandom]
    [java.util.concurrent.atomic LongAdder]))
@@ -12,8 +11,8 @@
 
 (defn transfer
   "Realistic transfer: commits only when the source account has sufficient
-   funds. Used for throughput and correctness benchmarks where business
-   logic must be exercised under concurrent load."
+   funds. on-commit hook increments the counter atomically with the commit —
+   the thesis's key advantage over native Clojure STM."
   [bank from to amount]
   (stm/dosync
    (let [from-ref ((:accounts bank) from)
@@ -26,12 +25,9 @@
        true))))
 
 (defn- transfer-unchecked
-  "Latency-benchmark variant: skips the balance guard so the STM commit path
-   is always exercised regardless of account state. Criterium runs hundreds of
-   thousands of iterations on the same refs — a realistic transfer would drain
-   the balance early and reduce subsequent calls to a cheap nil return, making
-   the measurement a blend of commit overhead and failed-check overhead rather
-   than a clean signal. Disclosed in the thesis experimental setup section."
+  "Latency-benchmark variant: skips the balance guard so every Criterium
+   iteration exercises the full STM commit path regardless of account state.
+   Disclosed in the thesis experimental setup section."
   [bank from to amount]
   (stm/dosync
    (let [from-ref ((:accounts bank) from)
@@ -43,8 +39,7 @@
 
 (defn- transfer-unchecked-no-hook
   "Same as transfer-unchecked but registers no on-commit hook.
-   Used as the baseline in the hook-overhead comparison so the only
-   difference between the two measurements is hook dispatch cost."
+   Baseline for isolating hook dispatch overhead."
   [bank from to amount]
   (stm/dosync
    (let [from-ref ((:accounts bank) from)
@@ -54,7 +49,11 @@
      true)))
 
 (defn total-balance [bank]
-  (stm/dosync (reduce + (map stm/deref (:accounts bank)))))
+  (stm/dosync (reduce + (mapv stm/deref (:accounts bank)))))
+
+;; ---------------------------------------------------------------------------
+;; Thread utilities
+;; ---------------------------------------------------------------------------
 
 (defn- launch-threads [n f]
   (let [ready   (CountDownLatch. n)
@@ -75,15 +74,20 @@
 (defn- join-all [threads]
   (doseq [^Thread t threads] (.join t)))
 
-(defn- run-bank-throughput
-  "Concurrent throughput measurement using realistic transfer.
-   Initial balance of 100 000 keeps rejection rate negligible across the
-   bounded transaction count, so TPS reflects contention overhead not
-   business-logic failures."
-  [n-threads n-accounts n-txns-per-thread]
+;; ---------------------------------------------------------------------------
+;; Throughput benchmark
+;;
+;; Initial balance of 100,000 keeps rejection rate negligible across the
+;; bounded transaction count, so TPS reflects contention overhead rather
+;; than business-logic failures.
+;;
+;; Timing starts immediately before gate opens and stops after all threads
+;; finish, so elapsed covers only actual transaction execution.
+;; ---------------------------------------------------------------------------
+
+(defn- run-bank-throughput [n-threads n-accounts n-txns-per-thread]
   (let [bank       (make-bank n-accounts 100000)
         successful (LongAdder.)
-        start      (volatile! 0)
         [threads ^CountDownLatch gate]
         (launch-threads
          n-threads
@@ -94,18 +98,18 @@
                                   n-accounts))
                    amt  (inc (.nextInt tlr 100))]
                (when (transfer bank from to amt)
-                 (.increment successful))))))]
-    (vreset! start (System/nanoTime))
-    (.countDown gate)
-    (join-all threads)
-    (let [elapsed-ms (/ (- (System/nanoTime) @start) 1e6)
-          succ       (.sum successful)
-          correct?   (= (total-balance bank) (* n-accounts 100000))]
-      {:threads      n-threads
-       :successful   succ
-       :elapsed-ms   elapsed-ms
-       :txns-per-sec (long (/ succ (/ elapsed-ms 1000)))
-       :correct?     correct?})))
+                 (.increment successful))))))
+        start      (System/nanoTime)
+        _          (.countDown gate)
+        _          (join-all threads)
+        elapsed-ms (/ (- (System/nanoTime) start) 1e6)
+        succ       (.sum successful)
+        correct?   (= (total-balance bank) (* n-accounts 100000))]
+    {:threads      n-threads
+     :successful   succ
+     :elapsed-ms   elapsed-ms
+     :txns-per-sec (long (/ succ (/ elapsed-ms 1000)))
+     :correct?     correct?}))
 
 (defn run-bank-throughput-suite []
   (println "\n--- Bank Transfer (20 accounts) ---")
@@ -115,6 +119,12 @@
     (let [{:keys [txns-per-sec correct?]} (run-bank-throughput n 20 3000)]
       (println (format "  opusdb  txns/sec: %d  correct: %s"
                        txns-per-sec (str correct?))))))
+
+;; ---------------------------------------------------------------------------
+;; Correctness check
+;;
+;; 20 threads transfer concurrently for 5 seconds. Sum invariant must hold.
+;; ---------------------------------------------------------------------------
 
 (defn run-correctness-check []
   (println "\n=== Bank Correctness Check ===")
@@ -144,29 +154,30 @@
     (println (format "Successful transfers: %d"
                      (.sum ^LongAdder (:transfers bank))))))
 
+;; ---------------------------------------------------------------------------
+;; Latency benchmarks
+;;
+;; Four scenarios on a single thread:
+;;   (i)   Uncontended baseline — floor cost of the full commit path.
+;;   (ii)  Extreme contention (12 futures) — backoff + ownership-stealing path.
+;;   (iii) No-hook baseline — isolates hook dispatch cost.
+;;   (iv)  With on-commit hook — same work + hook dispatch.
+;; ---------------------------------------------------------------------------
+
 (defn run-bank-latency-benchmarks []
   (println "\n=== Criterium Statistical Benchmarks ===")
   (println "\n--- Bank Latency ---")
 
-  ;; (i) Single uncontended transfer — baseline commit path cost.
-  ;; Criterium runs sequentially on one thread; this measures the STM's
-  ;; commit overhead with zero contention.
   (println "\nBenchmarking single transfer transaction — opusdb:")
   (let [bank (make-bank 10 100000)]
     (crit/quick-bench (transfer-unchecked bank 0 1 10)))
 
-  ;; (ii) Extreme contention: 12 futures all targeting the same two accounts
-  ;;      concurrently. Measures the backoff and ownership-stealing path under
-  ;;      peak multi-threaded pressure. Thread count matches benchmark ceiling.
   (println "\nBenchmarking extreme-contention with futures — opusdb:")
   (let [bank (make-bank 10 100000)]
     (crit/quick-bench
      (let [fs (mapv (fn [_] (future (transfer-unchecked bank 0 1 1))) (range 12))]
        (run! deref fs))))
 
-  ;; (iii) on-commit hook overhead: isolates event-system dispatch cost by
-  ;;       comparing identical STM work with and without a registered handler.
-  ;;       This is the thesis's key contribution over native Clojure STM.
   (println "\nBenchmarking on-commit hook overhead (no hook baseline) — opusdb:")
   (let [bank (make-bank 10 100000)]
     (crit/quick-bench (transfer-unchecked-no-hook bank 0 1 1)))
@@ -177,4 +188,5 @@
 
 (defn benchmark-bank []
   (run-correctness-check)
+  (run-bank-throughput-suite)
   (run-bank-latency-benchmarks))

@@ -16,3 +16,7 @@
   (println "\nBenchmarking Complete.")
   (println "Reports generated in doc/figures/")
   (shutdown-agents))
+
+;; (defn -main [& args]
+;;  (run-jfr-benchmark (first args))
+;;  (shutdown-agents))

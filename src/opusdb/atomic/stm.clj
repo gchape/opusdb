@@ -9,7 +9,7 @@
    [java.util.concurrent ThreadLocalRandom]))
 
 (def ^:private max-history   16)
-(def ^:private max-retries   256)
+(def ^:private max-retries   96)
 (def ^:private base-sleep-ms  1)
 (def ^:private max-sleep-ms  32)
 

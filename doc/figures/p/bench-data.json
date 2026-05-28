@@ -1,101 +1,101 @@
 {
   "throughput" : {
     "High Contention (single ref)" : [ {
-      "opusdb" : 191989,
+      "opusdb" : 304090,
       "aborts-per-commit" : 0.0,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 313780,
+      "opusdb" : 327921,
       "aborts-per-commit" : 0.0,
       "correct?" : true,
       "threads" : 6
     }, {
-      "opusdb" : 398005,
-      "aborts-per-commit" : 0.07,
+      "opusdb" : 428264,
+      "aborts-per-commit" : 0.05,
       "correct?" : true,
       "threads" : 12
     } ],
     "Low Contention (isolated refs)" : [ {
-      "opusdb" : 1145772,
+      "opusdb" : 1196671,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1243557,
+      "opusdb" : 1301008,
       "correct?" : true,
       "threads" : 6
     }, {
-      "opusdb" : 1360233,
+      "opusdb" : 1440794,
       "correct?" : true,
       "threads" : 12
     } ],
     "Bank Transfer (20 accounts)" : [ {
-      "opusdb" : 211423,
+      "opusdb" : 217380,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 171684,
+      "opusdb" : 204732,
       "correct?" : true,
       "threads" : 6
     }, {
-      "opusdb" : 245861,
+      "opusdb" : 238420,
       "correct?" : true,
       "threads" : 12
     } ],
     "Read-Heavy Mix (10% writes, 10 refs)" : [ {
-      "opusdb" : 1454270,
+      "opusdb" : 2149343,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 1773016,
+      "opusdb" : 2202686,
       "correct?" : true,
       "threads" : 6
     }, {
-      "opusdb" : 1525335,
+      "opusdb" : 2288055,
       "correct?" : true,
       "threads" : 12
     } ],
     "Write-Heavy Mix (90% writes, 10 refs)" : [ {
-      "opusdb" : 587219,
-      "aborts-per-commit" : 0.15,
+      "opusdb" : 506456,
+      "aborts-per-commit" : 0.0,
       "correct?" : true,
       "threads" : 4
     }, {
-      "opusdb" : 617315,
-      "aborts-per-commit" : 0.11,
+      "opusdb" : 699449,
+      "aborts-per-commit" : 0.0,
       "correct?" : true,
       "threads" : 6
     }, {
-      "opusdb" : 543641,
-      "aborts-per-commit" : 0.18,
+      "opusdb" : 423942,
+      "aborts-per-commit" : 0.0,
       "correct?" : true,
       "threads" : 12
     } ]
   },
   "criterium" : {
     "Benchmarking single transfer transaction" : {
-      "mean" : 1.998736,
-      "std" : 0.02066381,
-      "lower" : 1.976859,
-      "upper" : 2.02807
+      "mean" : 1.791892,
+      "std" : 0.060482503,
+      "lower" : 1.747418,
+      "upper" : 1.894136
     },
     "Benchmarking extreme-contention with futures" : {
-      "mean" : 287.701834,
-      "std" : 33.427868,
-      "lower" : 230.9493,
-      "upper" : 322.805712
+      "mean" : 243.327355,
+      "std" : 26.501077,
+      "lower" : 213.483097,
+      "upper" : 282.816148
     },
     "Benchmarking on-commit hook overhead (no hook baseline)" : {
-      "mean" : 1.876692,
-      "std" : 0.039043308000000006,
-      "lower" : 1.831068,
-      "upper" : 1.926441
+      "mean" : 1.681759,
+      "std" : 0.035381512000000004,
+      "lower" : 1.646465,
+      "upper" : 1.734192
     },
     "Benchmarking on-commit hook overhead (with hook)" : {
-      "mean" : 2.019284,
-      "std" : 0.033024484,
-      "lower" : 1.967795,
-      "upper" : 2.048991
+      "mean" : 1.844213,
+      "std" : 0.069501717,
+      "lower" : 1.72839,
+      "upper" : 1.907942
     }
   },
   "bank" : {
@@ -104,22 +104,22 @@
       "actual" : 10000,
       "correct?" : true
     },
-    "total-transfers" : 1813153,
+    "total-transfers" : 1973014,
     "scenarios" : [ {
-      "mean" : 1.998736,
-      "std" : 0.02066381,
+      "mean" : 1.791892,
+      "std" : 0.060482503,
       "label" : "single transfer transaction — opusdb"
     }, {
-      "mean" : 287.701834,
-      "std" : 33.427868,
+      "mean" : 243.327355,
+      "std" : 26.501077,
       "label" : "extreme-contention with futures — opusdb"
     }, {
-      "mean" : 1.876692,
-      "std" : 0.039043308000000006,
+      "mean" : 1.681759,
+      "std" : 0.035381512000000004,
       "label" : "on-commit hook overhead (no hook baseline) — opusdb"
     }, {
-      "mean" : 2.019284,
-      "std" : 0.033024484,
+      "mean" : 1.844213,
+      "std" : 0.069501717,
       "label" : "on-commit hook overhead (with hook) — opusdb"
     } ]
   }

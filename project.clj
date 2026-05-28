@@ -25,6 +25,10 @@
                       "-XX:+AlwaysPreTouch"
                       "-XX:+UnlockDiagnosticVMOptions"
                       "-XX:+DebugNonSafepoints"]}
+
+   :jfr {:dependencies [[criterium "0.4.6"]]
+         :jvm-opts ["-XX:+FlightRecorder"
+                    "-XX:StartFlightRecording=name=stm,settings=profile,disk=true,filename=stm-bench.jfr"]}
    
    :prod {:aot :all
           :jvm-opts ["-Dclojure.compiler.direct-linking=true"
