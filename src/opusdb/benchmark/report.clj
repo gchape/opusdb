@@ -188,29 +188,28 @@
 
 (defn- history-sweep-table [sweep-data]
   (when (seq sweep-data)
-    (let [thread-counts (->> sweep-data (map :threads) distinct sort)]
-      (str
-       "\\begin{table}[htbp]\n"
-       "  \\centering\n"
-       "  \\caption{Version history size sweep: bank transfer throughput and abort rates}\n"
-       "  \\label{tab:history-sweep}\n"
-       "  \\begin{tabular}{@{}rrrrrr@{}}\n"
-       "    \\toprule\n"
-       "    \\texttt{max-history} & Threads & TPS & Conflict aborts/commit & Trim aborts/commit \\\\\n"
-       "    \\midrule\n"
-       (str/join
-        (map (fn [{:keys [max-history threads txns-per-sec
-                          conflict-aborts-per-commit trim-aborts-per-commit]}]
-               (format "    %d & %d & %s & %s & %s \\\\\n"
-                       max-history
-                       threads
-                       (tex-safe (format "%,d" (long (or txns-per-sec 0))))
-                       (tex-safe (fmt-abort conflict-aborts-per-commit))
-                       (tex-safe (fmt-abort trim-aborts-per-commit))))
-             (sort-by (juxt :max-history :threads) sweep-data)))
-       "    \\bottomrule\n"
-       "  \\end{tabular}\n"
-       "\\end{table}\n"))))
+    (str
+     "\\begin{table}[htbp]\n"
+     "  \\centering\n"
+     "  \\caption{Version history size sweep: bank transfer throughput and abort rates}\n"
+     "  \\label{tab:history-sweep}\n"
+     "  \\begin{tabular}{@{}rrrrrr@{}}\n"
+     "    \\toprule\n"
+     "    \\texttt{max-history} & Threads & TPS & Conflict aborts/commit & Trim aborts/commit \\\\\n"
+     "    \\midrule\n"
+     (str/join
+      (map (fn [{:keys [max-history threads txns-per-sec
+                        conflict-aborts-per-commit trim-aborts-per-commit]}]
+             (format "    %d & %d & %s & %s & %s \\\\\n"
+                     max-history
+                     threads
+                     (tex-safe (format "%,d" (long (or txns-per-sec 0))))
+                     (tex-safe (fmt-abort conflict-aborts-per-commit))
+                     (tex-safe (fmt-abort trim-aborts-per-commit))))
+           (sort-by (juxt :max-history :threads) sweep-data)))
+     "    \\bottomrule\n"
+     "  \\end{tabular}\n"
+     "\\end{table}\n")))
 
 (defn- history-sweep-chart [sweep-data]
   (when (seq sweep-data)
