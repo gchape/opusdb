@@ -10,7 +10,9 @@
       (str/replace #"_" "\\\\_")
       (str/replace #"%" "\\\\%")
       (str/replace #"&" "\\\\&")
-      (str/replace #"\$" "\\\\$")))
+      (str/replace #"\$" "\\\\$")
+      (str/replace #"\{" "\\\\{")
+      (str/replace #"\}" "\\\\}")))
 
 (def ^:private throughput-charts
   [["High Contention (single ref)"
@@ -24,45 +26,59 @@
     "Throughput: Bank Transfer (20 accounts)"]
    ["Read-Heavy Mix (10% writes, 10 refs)"
     "throughput-read-heavy"
-    "Throughput: Read-Heavy Mix (10% writes)"]
+    "Throughput: Read-Heavy Mix (10\\% writes)"]
    ["Write-Heavy Mix (90% writes, 10 refs)"
     "throughput-write-heavy"
-    "Throughput: Write-Heavy Mix (90% writes)"]])
+    "Throughput: Write-Heavy Mix (90\\% writes)"]])
 
-;; ---------------------------------------------------------------------------
-;; Throughput summary table
-;;
-;; Renders a LaTeX longtable with columns:
-;;   Scenario | Threads | TPS | Aborts/commit (only when data present) | Correct
-;;
-;; The aborts/commit column appears only for scenarios where at least one
-;; thread-count row carries the field (i.e. high-contention and write-heavy).
-;; ---------------------------------------------------------------------------
+(defn- has-conflict-aborts? [rows]
+  (some :conflict-aborts-per-commit rows))
 
-(defn- has-aborts? [rows]
-  (some :aborts-per-commit rows))
+(defn- has-trim-aborts? [rows]
+  (some :trim-aborts-per-commit rows))
 
-(defn- throughput-table-row [row show-aborts?]
-  (let [tps    (or (:opusdb row) 0)
-        aborts (:aborts-per-commit row)
-        ok?    (:correct? row)]
-    (if show-aborts?
+(defn- fmt-abort [v]
+  (if v (format "%.2f" (double v)) "---"))
+
+(defn- throughput-table-row [row show-conflict? show-trim?]
+  (let [tps (or (:opusdb row) 0)
+        ok? (:correct? row)]
+    (cond
+      (and show-conflict? show-trim?)
+      (format "    %d & %s & %s & %s & %s \\\\\n"
+              (:threads row)
+              (tex-safe (format "%,d" (long tps)))
+              (tex-safe (fmt-abort (:conflict-aborts-per-commit row)))
+              (tex-safe (fmt-abort (:trim-aborts-per-commit row)))
+              (if ok? "\\checkmark" "\\texttimes"))
+
+      show-conflict?
       (format "    %d & %s & %s & %s \\\\\n"
               (:threads row)
               (tex-safe (format "%,d" (long tps)))
-              (tex-safe (if aborts (format "%.2f" aborts) "---"))
+              (tex-safe (fmt-abort (:conflict-aborts-per-commit row)))
               (if ok? "\\checkmark" "\\texttimes"))
+
+      :else
       (format "    %d & %s & %s \\\\\n"
               (:threads row)
               (tex-safe (format "%,d" (long tps)))
               (if ok? "\\checkmark" "\\texttimes")))))
 
 (defn- throughput-section-table [scenario-label rows]
-  (let [show-aborts? (has-aborts? rows)
-        col-spec     (if show-aborts? "rrrr" "rrr")
-        header       (if show-aborts?
-                       "    Threads & TPS & Aborts/commit & Correct \\\\\n"
-                       "    Threads & TPS & Correct \\\\\n")]
+  (let [show-conflict? (has-conflict-aborts? rows)
+        show-trim?     (has-trim-aborts? rows)
+        [col-spec header]
+        (cond
+          (and show-conflict? show-trim?)
+          ["rrrrr"
+           "    Threads & TPS & Conflict aborts/commit & Trim aborts/commit & Correct \\\\\n"]
+          show-conflict?
+          ["rrrr"
+           "    Threads & TPS & Conflict aborts/commit & Correct \\\\\n"]
+          :else
+          ["rrr"
+           "    Threads & TPS & Correct \\\\\n"])]
     (str
      "\\begin{table}[htbp]\n"
      "  \\centering\n"
@@ -71,38 +87,10 @@
      "    \\toprule\n"
      header
      "    \\midrule\n"
-     (str/join (map #(throughput-table-row % show-aborts?) rows))
+     (str/join (map #(throughput-table-row % show-conflict? show-trim?) rows))
      "    \\bottomrule\n"
      "  \\end{tabular}\n"
      "\\end{table}\n")))
-
-(defn- pgf-scalability-chart [section-data title label]
-  (str
-   "\\begin{figure}[htbp]\n"
-   "  \\centering\n"
-   "  \\begin{tikzpicture}\n"
-   "    \\begin{axis}[\n"
-   "      title={" (tex-safe title) "},\n"
-   "      xlabel={Thread count},\n"
-   "      ylabel={Transactions / sec},\n"
-   "      width=0.75\\textwidth, height=6cm,\n"
-   "      xtick=data, ymin=0,\n"
-   "      ymajorgrids=true, grid style=dashed,\n"
-   "      mark=*, tick label style={font=\\small},\n"
-   "      label style={font=\\small}, title style={font=\\small\\itshape},\n"
-   "    ]\n"
-   "    \\addplot[color=blue!40!black, mark=*] coordinates {\n"
-   (str/join "\n"
-             (map (fn [{:keys [threads opusdb]}]
-                    (format "      (%d,%d)" threads (or opusdb 0)))
-                  section-data))
-   "\n    };\n"
-   "    \\legend{opusdb STM}\n"
-   "    \\end{axis}\n"
-   "  \\end{tikzpicture}\n"
-   "  \\caption{" (tex-safe title) " (Scaling)}\n"
-   "  \\label{fig:" label "-scaling}\n"
-   "\\end{figure}\n"))
 
 (defn- pgf-throughput-chart [section-data title label]
   (str
@@ -132,14 +120,37 @@
    "  \\label{fig:" label "}\n"
    "\\end{figure}\n"))
 
-;; ---------------------------------------------------------------------------
-;; Aborts/commit chart — rendered for high-contention and write-heavy sections
-;; that carry the field.  Uses a simple line plot so it can sit beside the
-;; TPS bar chart without clashing visually.
-;; ---------------------------------------------------------------------------
+(defn- pgf-scalability-chart [section-data title label]
+  (str
+   "\\begin{figure}[htbp]\n"
+   "  \\centering\n"
+   "  \\begin{tikzpicture}\n"
+   "    \\begin{axis}[\n"
+   "      title={" (tex-safe title) "},\n"
+   "      xlabel={Thread count},\n"
+   "      ylabel={Transactions / sec},\n"
+   "      width=0.75\\textwidth, height=6cm,\n"
+   "      xtick=data, ymin=0,\n"
+   "      ymajorgrids=true, grid style=dashed,\n"
+   "      mark=*, tick label style={font=\\small},\n"
+   "      label style={font=\\small}, title style={font=\\small\\itshape},\n"
+   "    ]\n"
+   "    \\addplot[color=blue!40!black, mark=*] coordinates {\n"
+   (str/join "\n"
+             (map (fn [{:keys [threads opusdb]}]
+                    (format "      (%d,%d)" threads (or opusdb 0)))
+                  section-data))
+   "\n    };\n"
+   "    \\legend{opusdb STM}\n"
+   "    \\end{axis}\n"
+   "  \\end{tikzpicture}\n"
+   "  \\caption{" (tex-safe title) " (Scaling)}\n"
+   "  \\label{fig:" label "-scaling}\n"
+   "\\end{figure}\n"))
 
-(defn- pgf-aborts-chart [section-data title label]
-  (when (has-aborts? section-data)
+(defn- pgf-abort-charts [section-data title label]
+  (when (or (has-conflict-aborts? section-data)
+            (has-trim-aborts? section-data))
     (str
      "\\begin{figure}[htbp]\n"
      "  \\centering\n"
@@ -153,21 +164,100 @@
      "      ymajorgrids=true, grid style=dashed,\n"
      "      mark=*, tick label style={font=\\small},\n"
      "      label style={font=\\small}, title style={font=\\small\\itshape},\n"
+     "      legend pos=north west,\n"
      "    ]\n"
      "    \\addplot[color=red!60!black, mark=*] coordinates {\n"
      (str/join "\n"
-               (map (fn [{:keys [threads aborts-per-commit]}]
-                      (format "      (%d,%.2f)" threads (or aborts-per-commit 0.0)))
+               (map (fn [{:keys [threads conflict-aborts-per-commit]}]
+                      (format "      (%d,%.2f)" threads (or conflict-aborts-per-commit 0.0)))
                     section-data))
      "\n    };\n"
+     "    \\addlegendentry{conflict aborts}\n"
+     "    \\addplot[color=orange!80!black, mark=square*] coordinates {\n"
+     (str/join "\n"
+               (map (fn [{:keys [threads trim-aborts-per-commit]}]
+                      (format "      (%d,%.2f)" threads (or trim-aborts-per-commit 0.0)))
+                    section-data))
+     "\n    };\n"
+     "    \\addlegendentry{trim aborts}\n"
      "    \\end{axis}\n"
      "  \\end{tikzpicture}\n"
      "  \\caption{" (tex-safe (str title " — Aborts per Commit")) "}\n"
      "  \\label{fig:" label "-aborts}\n"
      "\\end{figure}\n")))
 
+(defn- history-sweep-table [sweep-data]
+  (when (seq sweep-data)
+    (let [thread-counts (->> sweep-data (map :threads) distinct sort)]
+      (str
+       "\\begin{table}[htbp]\n"
+       "  \\centering\n"
+       "  \\caption{Version history size sweep: bank transfer throughput and abort rates}\n"
+       "  \\label{tab:history-sweep}\n"
+       "  \\begin{tabular}{@{}rrrrrr@{}}\n"
+       "    \\toprule\n"
+       "    \\texttt{max-history} & Threads & TPS & Conflict aborts/commit & Trim aborts/commit \\\\\n"
+       "    \\midrule\n"
+       (str/join
+        (map (fn [{:keys [max-history threads txns-per-sec
+                          conflict-aborts-per-commit trim-aborts-per-commit]}]
+               (format "    %d & %d & %s & %s & %s \\\\\n"
+                       max-history
+                       threads
+                       (tex-safe (format "%,d" (long (or txns-per-sec 0))))
+                       (tex-safe (fmt-abort conflict-aborts-per-commit))
+                       (tex-safe (fmt-abort trim-aborts-per-commit))))
+             (sort-by (juxt :max-history :threads) sweep-data)))
+       "    \\bottomrule\n"
+       "  \\end{tabular}\n"
+       "\\end{table}\n"))))
+
+(defn- history-sweep-chart [sweep-data]
+  (when (seq sweep-data)
+    (let [thread-counts (->> sweep-data (map :threads) distinct sort)
+          colors        ["blue!60!black" "red!60!black" "green!50!black"]]
+      (str
+       "\\begin{figure}[htbp]\n"
+       "  \\centering\n"
+       "  \\begin{tikzpicture}\n"
+       "    \\begin{axis}[\n"
+       "      title={Throughput vs.\\ version history size},\n"
+       "      xlabel={\\texttt{max-history}},\n"
+       "      ylabel={Transactions / sec},\n"
+       "      width=0.75\\textwidth, height=6cm,\n"
+       "      xtick=data, ymin=0,\n"
+       "      ymajorgrids=true, grid style=dashed,\n"
+       "      mark=*, tick label style={font=\\small},\n"
+       "      label style={font=\\small}, title style={font=\\small\\itshape},\n"
+       "      legend pos=south east,\n"
+       "    ]\n"
+       (str/join
+        (map-indexed
+         (fn [i n]
+           (let [rows (->> sweep-data
+                           (filter #(= (:threads %) n))
+                           (sort-by :max-history))
+                 color (nth colors i "gray")]
+             (str
+              "    \\addplot[color=" color ", mark=*] coordinates {\n"
+              (str/join "\n"
+                        (map (fn [{:keys [max-history txns-per-sec]}]
+                               (format "      (%d,%d)" max-history (or txns-per-sec 0)))
+                             rows))
+              "\n    };\n"
+              "    \\addlegendentry{" n " threads}\n")))
+         thread-counts))
+       "    \\end{axis}\n"
+       "  \\end{tikzpicture}\n"
+       "  \\caption{Throughput across version history sizes (bank transfer, 20 accounts).}\n"
+       "  \\label{fig:history-sweep}\n"
+       "\\end{figure}\n"))))
+
 (defn- pgf-bank-latency-chart [scenarios title label]
-  (let [n (count scenarios)]
+  (let [n (count scenarios)
+        base-height-cm    3
+        per-scenario-cm   0.8
+        chart-height-cm   (+ base-height-cm (* n per-scenario-cm))]
     (str
      "\\begin{figure}[htbp]\n"
      "  \\centering\n"
@@ -175,11 +265,15 @@
      "    \\begin{axis}[\n"
      "      title={" (tex-safe title) "},\n"
      "      xlabel={Mean execution time ($\\mu$s)},\n"
-     "      width=0.85\\textwidth, height=" (+ 3 (* n 0.8)) "cm,\n"
+     "      width=0.85\\textwidth, height=" chart-height-cm "cm,\n"
      "      xbar, bar width=12pt, xmode=log, xmin=1,\n"
      "      enlarge x limits={upper, value=0.15},\n"
      "      ytick={" (str/join "," (range n)) "},\n"
-     "      yticklabels={" (str/join "," (map-indexed (fn [i _] (str "(\\romannumeral " (inc i) ")")) scenarios)) "},\n"
+     "      yticklabels={"
+     (str/join ","
+               (map-indexed (fn [i _] (str "(\\romannumeral " (inc i) ")"))
+                            scenarios))
+     "},\n"
      "      xmajorgrids=true, grid style=dashed,\n"
      "      tick label style={font=\\small}, label style={font=\\small},\n"
      "      title style={font=\\small\\itshape},\n"
@@ -213,30 +307,35 @@
      "  \\label{fig:" label "}\n"
      "\\end{figure}\n")))
 
-(defn- build-pgf-tex [throughput bank]
+(defn- build-pgf-tex [throughput history-sweep bank]
   (str
    "% Generated by opusdb.benchmark.report\n"
    "% Required packages: \\usepackage{pgfplots} \\pgfplotsset{compat=1.18}\n"
-   "%                    \\usepackage{booktabs} (for throughput tables)\n\n"
+   "%                    \\usepackage{booktabs}\n\n"
    (when throughput
      (str/join "\n"
                (for [[k stem caption] throughput-charts
                      :let  [data (get throughput k)]
                      :when (seq data)]
                  (str
-                  ;; Per-scenario summary table
                   (throughput-section-table caption data)
                   "\n"
-                  ;; TPS bar chart
                   (pgf-throughput-chart data caption stem)
                   "\n"
-                  ;; Scalability line chart
                   (pgf-scalability-chart data caption stem)
                   "\n"
-                  ;; Aborts/commit chart (only emitted when data present)
-                  (some-> (pgf-aborts-chart data caption stem) (str "\n"))))))
+                  (some-> (pgf-abort-charts data caption stem) (str "\n"))))))
+   (when (seq history-sweep)
+     (str "\n"
+          (history-sweep-table history-sweep)
+          "\n"
+          (history-sweep-chart history-sweep)
+          "\n"))
    (when (seq (:scenarios bank))
-     (pgf-bank-latency-chart (:scenarios bank) "Bank Transfer Latency" "bank-contention-latency"))))
+     (pgf-bank-latency-chart
+      (:scenarios bank)
+      "Bank Transfer Latency"
+      "bank-contention-latency"))))
 
 (defn generate-pgf!
   ([stdout output-dir]
@@ -244,12 +343,17 @@
   ([stdout output-dir {:keys [latex-file]
                        :or   {latex-file (str output-dir "/benchmarks.tex")}}]
    (.mkdirs (io/file output-dir))
-   (let [{:keys [throughput criterium bank]} (parse/parse-all stdout)
+   (let [{:keys [throughput history-sweep criterium bank]}
+         (parse/parse-all stdout)
          json-path (str output-dir "/bench-data.json")]
-     (spit json-path (json/generate-string
-                      {:throughput throughput :criterium criterium :bank bank}
-                      {:pretty true}))
-     (spit latex-file (build-pgf-tex throughput bank))
+     (spit json-path
+           (json/generate-string
+            {:throughput    throughput
+             :history-sweep history-sweep
+             :criterium     criterium
+             :bank          bank}
+            {:pretty true}))
+     (spit latex-file (build-pgf-tex throughput history-sweep bank))
      (println "  Generated JSON and LaTeX report in:" output-dir))))
 
 (defn capture-and-generate-pgf!

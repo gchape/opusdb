@@ -1,0 +1,205 @@
+{
+  "throughput" : {
+    "High Contention (single ref)" : [ {
+      "opusdb" : 138633,
+      "conflict-aborts-per-commit" : 0.0,
+      "trim-aborts-per-commit" : 0.0,
+      "correct?" : true,
+      "threads" : 4
+    }, {
+      "opusdb" : 253421,
+      "conflict-aborts-per-commit" : 0.0,
+      "trim-aborts-per-commit" : 0.0,
+      "correct?" : true,
+      "threads" : 6
+    }, {
+      "opusdb" : 425973,
+      "conflict-aborts-per-commit" : 0.0,
+      "trim-aborts-per-commit" : 0.0,
+      "correct?" : true,
+      "threads" : 12
+    } ],
+    "Low Contention (isolated refs)" : [ {
+      "opusdb" : 1322570,
+      "correct?" : true,
+      "threads" : 4
+    }, {
+      "opusdb" : 1092815,
+      "correct?" : true,
+      "threads" : 6
+    }, {
+      "opusdb" : 1033984,
+      "correct?" : true,
+      "threads" : 12
+    } ],
+    "Bank Transfer (20 accounts)" : [ {
+      "opusdb" : 213631,
+      "correct?" : true,
+      "threads" : 4
+    }, {
+      "opusdb" : 163402,
+      "correct?" : true,
+      "threads" : 6
+    }, {
+      "opusdb" : 173725,
+      "correct?" : true,
+      "threads" : 12
+    } ],
+    "Read-Heavy Mix (10% writes, 10 refs)" : [ {
+      "opusdb" : 533885,
+      "correct?" : true,
+      "threads" : 4
+    }, {
+      "opusdb" : 1082057,
+      "correct?" : true,
+      "threads" : 6
+    }, {
+      "opusdb" : 1969463,
+      "correct?" : true,
+      "threads" : 12
+    } ],
+    "Write-Heavy Mix (90% writes, 10 refs)" : [ {
+      "opusdb" : 637709,
+      "conflict-aborts-per-commit" : 0.0,
+      "trim-aborts-per-commit" : 0.0,
+      "correct?" : true,
+      "threads" : 4
+    }, {
+      "opusdb" : 418108,
+      "conflict-aborts-per-commit" : 0.0,
+      "trim-aborts-per-commit" : 0.0,
+      "correct?" : true,
+      "threads" : 6
+    }, {
+      "opusdb" : 257574,
+      "conflict-aborts-per-commit" : 0.0,
+      "trim-aborts-per-commit" : 0.0,
+      "correct?" : true,
+      "threads" : 12
+    } ]
+  },
+  "history-sweep" : [ {
+    "max-history" : 8,
+    "threads" : 4,
+    "txns-per-sec" : 315642,
+    "conflict-aborts-per-commit" : 0.13,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 8,
+    "threads" : 6,
+    "txns-per-sec" : 243242,
+    "conflict-aborts-per-commit" : 0.14,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 8,
+    "threads" : 12,
+    "txns-per-sec" : 179881,
+    "conflict-aborts-per-commit" : 0.55,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 16,
+    "threads" : 4,
+    "txns-per-sec" : 285371,
+    "conflict-aborts-per-commit" : 0.12,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 16,
+    "threads" : 6,
+    "txns-per-sec" : 226183,
+    "conflict-aborts-per-commit" : 0.19,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 16,
+    "threads" : 12,
+    "txns-per-sec" : 186386,
+    "conflict-aborts-per-commit" : 0.59,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 32,
+    "threads" : 4,
+    "txns-per-sec" : 313661,
+    "conflict-aborts-per-commit" : 0.13,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 32,
+    "threads" : 6,
+    "txns-per-sec" : 349891,
+    "conflict-aborts-per-commit" : 0.19,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 32,
+    "threads" : 12,
+    "txns-per-sec" : 233055,
+    "conflict-aborts-per-commit" : 0.5,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 64,
+    "threads" : 4,
+    "txns-per-sec" : 412767,
+    "conflict-aborts-per-commit" : 0.11,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 64,
+    "threads" : 6,
+    "txns-per-sec" : 342681,
+    "conflict-aborts-per-commit" : 0.25,
+    "trim-aborts-per-commit" : 0.0
+  }, {
+    "max-history" : 64,
+    "threads" : 12,
+    "txns-per-sec" : 309651,
+    "conflict-aborts-per-commit" : 0.2,
+    "trim-aborts-per-commit" : 0.0
+  } ],
+  "criterium" : {
+    "Benchmarking single transfer transaction" : {
+      "mean" : 1.758113,
+      "std" : 0.02951168,
+      "lower" : 1.726662,
+      "upper" : 1.789862
+    },
+    "Benchmarking extreme-contention with futures" : {
+      "mean" : 401.556364,
+      "std" : 35.249033,
+      "lower" : 349.985711,
+      "upper" : 429.148385
+    },
+    "Benchmarking on-commit hook overhead (no hook baseline)" : {
+      "mean" : 1.587051,
+      "std" : 0.031866055,
+      "lower" : 1.557304,
+      "upper" : 1.619584
+    },
+    "Benchmarking on-commit hook overhead (with hook)" : {
+      "mean" : 1.809783,
+      "std" : 0.07680659699999999,
+      "lower" : 1.739769,
+      "upper" : 1.900707
+    }
+  },
+  "bank" : {
+    "integrity" : {
+      "expected" : 10000,
+      "actual" : 10000,
+      "correct?" : true
+    },
+    "total-transfers" : 1815648,
+    "scenarios" : [ {
+      "mean" : 1.758113,
+      "std" : 0.02951168,
+      "label" : "single transfer transaction — opusdb"
+    }, {
+      "mean" : 401.556364,
+      "std" : 35.249033,
+      "label" : "extreme-contention with futures — opusdb"
+    }, {
+      "mean" : 1.587051,
+      "std" : 0.031866055,
+      "label" : "on-commit hook overhead (no hook baseline) — opusdb"
+    }, {
+      "mean" : 1.809783,
+      "std" : 0.07680659699999999,
+      "label" : "on-commit hook overhead (with hook) — opusdb"
+    } ]
+  }
+}

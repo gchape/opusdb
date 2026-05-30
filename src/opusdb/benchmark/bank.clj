@@ -5,14 +5,18 @@
    [java.util.concurrent CountDownLatch ThreadLocalRandom]
    [java.util.concurrent.atomic LongAdder]))
 
+;; Thread counts used by both the suite runner and throughput.clj.
+;; Defined here (the bank ns is the lower-level dependency) so
+;; throughput.clj can refer to this var instead of duplicating the literal.
+(def thread-counts [4 6 12])
+
 (defn make-bank [n-accounts initial-balance]
   {:accounts  (vec (repeatedly n-accounts #(stm/ref initial-balance)))
    :transfers (LongAdder.)})
 
 (defn transfer
   "Realistic transfer: commits only when the source account has sufficient
-   funds. on-commit hook increments the counter atomically with the commit —
-   the thesis's key advantage over native Clojure STM."
+   funds. on-commit hook increments the counter atomically with the commit."
   [bank from to amount]
   (stm/dosync
    (let [from-ref ((:accounts bank) from)
@@ -25,9 +29,8 @@
        true))))
 
 (defn- transfer-unchecked
-  "Latency-benchmark variant: skips the balance guard so every Criterium
-   iteration exercises the full STM commit path regardless of account state.
-   Disclosed in the thesis experimental setup section."
+  "Latency variant: skips balance guard so every Criterium iteration
+   exercises the full commit path regardless of account state."
   [bank from to amount]
   (stm/dosync
    (let [from-ref ((:accounts bank) from)
@@ -38,7 +41,7 @@
      true)))
 
 (defn- transfer-unchecked-no-hook
-  "Same as transfer-unchecked but registers no on-commit hook.
+  "Same as transfer-unchecked but with no on-commit hook.
    Baseline for isolating hook dispatch overhead."
   [bank from to amount]
   (stm/dosync
@@ -58,15 +61,16 @@
 (defn- launch-threads [n f]
   (let [ready   (CountDownLatch. n)
         gate    (CountDownLatch. 1)
-        threads (into-array Thread
-                            (for [i (range n)]
-                              (Thread.
-                               ^Runnable
-                               (fn []
-                                 (let [tlr (ThreadLocalRandom/current)]
-                                   (.countDown ready)
-                                   (.await ^CountDownLatch gate)
-                                   (f i tlr))))))]
+        threads (into-array
+                 Thread
+                 (for [i (range n)]
+                   (Thread.
+                    ^Runnable
+                    (fn []
+                      (let [tlr (ThreadLocalRandom/current)]
+                        (.countDown ready)
+                        (.await ^CountDownLatch gate)
+                        (f i tlr))))))]
     (doseq [^Thread t threads] (.start t))
     (.await ready)
     [threads gate]))
@@ -81,11 +85,13 @@
 ;; bounded transaction count, so TPS reflects contention overhead rather
 ;; than business-logic failures.
 ;;
-;; Timing starts immediately before gate opens and stops after all threads
-;; finish, so elapsed covers only actual transaction execution.
+;; No manual warmup pass — the JVM warms naturally across thread-count
+;; iterations (4 → 6 → 12) and via the history-sweep that precedes this.
 ;; ---------------------------------------------------------------------------
 
-(defn- run-bank-throughput [n-threads n-accounts n-txns-per-thread]
+(defn run-bank-throughput
+  "Returns a result map.  Called by both the suite runner and the history sweep."
+  [n-threads n-accounts n-txns-per-thread]
   (let [bank       (make-bank n-accounts 100000)
         successful (LongAdder.)
         [threads ^CountDownLatch gate]
@@ -99,8 +105,49 @@
                    amt  (inc (.nextInt tlr 100))]
                (when (transfer bank from to amt)
                  (.increment successful))))))
-        start      (System/nanoTime)
-        _          (.countDown gate)
+        ;; FIX: start the clock when threads are actually released, matching
+        ;;      the timed-macro pattern used in throughput.clj.
+        start      (do (.countDown gate) (System/nanoTime))
+        _          (join-all threads)
+        elapsed-ms (/ (- (System/nanoTime) start) 1e6)
+        succ       (.sum successful)
+        correct?   (= (total-balance bank) (* n-accounts 100000))]
+    {:threads      n-threads
+     :successful   succ
+     :elapsed-ms   elapsed-ms
+     :txns-per-sec (long (/ succ (/ elapsed-ms 1000)))
+     :correct?     correct?}))
+
+;; FIX: added run-bank-throughput-counted, referenced by throughput.clj's
+;;      history sweep.  Accepts a dosync wrapper so abort counting is
+;;      handled externally by the caller (throughput/counting-dosync).
+(defn run-bank-throughput-counted
+  "Like run-bank-throughput but accepts a custom dosync* wrapper
+   (e.g. counting-dosync) for abort instrumentation.
+   Returns the same result map as run-bank-throughput."
+  [dosync* n-threads n-accounts n-txns-per-thread]
+  (let [bank       (make-bank n-accounts 100000)
+        successful (LongAdder.)
+        [threads ^CountDownLatch gate]
+        (launch-threads
+         n-threads
+         (fn [_ ^ThreadLocalRandom tlr]
+           (dotimes [_ n-txns-per-thread]
+             (let [from (.nextInt tlr n-accounts)
+                   to   (int (mod (+ from 1 (.nextInt tlr (dec n-accounts)))
+                                  n-accounts))
+                   amt  (inc (.nextInt tlr 100))]
+               (dosync*
+                (fn []
+                  (let [from-ref ((:accounts bank) from)
+                        to-ref   ((:accounts bank) to)
+                        from-bal (stm/deref from-ref)]
+                    (when (>= from-bal amt)
+                      (stm/ref-set from-ref (- from-bal amt))
+                      (stm/ref-set to-ref   (+ (stm/deref to-ref) amt))
+                      (stm/on-commit #(.increment successful))
+                      true))))))))
+        start      (do (.countDown gate) (System/nanoTime))
         _          (join-all threads)
         elapsed-ms (/ (- (System/nanoTime) start) 1e6)
         succ       (.sum successful)
@@ -113,17 +160,15 @@
 
 (defn run-bank-throughput-suite []
   (println "\n--- Bank Transfer (20 accounts) ---")
-  (doseq [n [4 6 12]]
+  ;; FIX: use the shared thread-counts var instead of a duplicated literal.
+  (doseq [n thread-counts]
     (println (str "\n  " n " threads:"))
-    (run-bank-throughput n 20 200)   ; warm-up
     (let [{:keys [txns-per-sec correct?]} (run-bank-throughput n 20 3000)]
       (println (format "  opusdb  txns/sec: %d  correct: %s"
                        txns-per-sec (str correct?))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Correctness check
-;;
-;; 20 threads transfer concurrently for 5 seconds. Sum invariant must hold.
 ;; ---------------------------------------------------------------------------
 
 (defn run-correctness-check []
@@ -147,7 +192,12 @@
     (run! #(.start ^Thread %) threads)
     (Thread/sleep 5000)
     (reset! running false)
-    (run! #(.join ^Thread % 2000) threads)
+    ;; FIX: check whether each thread actually finished within the timeout
+    ;;      and warn if any are still alive (rather than silently continuing).
+    (doseq [^Thread t threads]
+      (.join t 2000)
+      (when (.isAlive t)
+        (println "  WARNING: worker thread did not terminate within timeout")))
     (println (format "Total (should be %d): %d"
                      (* n-accounts 1000)
                      (total-balance bank)))
@@ -155,11 +205,14 @@
                      (.sum ^LongAdder (:transfers bank))))))
 
 ;; ---------------------------------------------------------------------------
-;; Latency benchmarks
+;; Latency benchmarks (Criterium, single-threaded)
 ;;
-;; Four scenarios on a single thread:
-;;   (i)   Uncontended baseline — floor cost of the full commit path.
-;;   (ii)  Extreme contention (12 futures) — backoff + ownership-stealing path.
+;; No manual warmup — Criterium handles warmup internally via its
+;; estimation and warmup phases.
+;;
+;; Four scenarios:
+;;   (i)   Single uncontended transfer — floor cost of the full commit path.
+;;   (ii)  Extreme contention (12 futures) — backoff + ownership-stealing.
 ;;   (iii) No-hook baseline — isolates hook dispatch cost.
 ;;   (iv)  With on-commit hook — same work + hook dispatch.
 ;; ---------------------------------------------------------------------------

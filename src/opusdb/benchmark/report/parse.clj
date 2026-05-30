@@ -20,30 +20,28 @@
       "sec" (* value 1.0e6)
       (double value))))
 
-;; Hardened regex: more flexible with whitespace and colons
-(def ^:private re-top-header    #"(?m)^===\s+(.+?)\s+===\s*$")
-(def ^:private re-sec-header    #"(?m)^---\s+(.+?)\s+---\s*$")
-(def ^:private re-threads       #"^\s*(\d+)\s+threads:\s*$")
+(def ^:private re-top-header #"(?m)^===\s+(.+?)\s+===\s*$")
+(def ^:private re-sec-header #"(?m)^---\s+(.+?)\s+---\s*$")
+(def ^:private re-threads    #"^\s*(\d+)\s+threads:\s*$")
 
-;; Two variants of the impl line:
-;;   plain:   opusdb  txns/sec: 123456  correct: true
-;;   counted: opusdb  txns/sec: 123456  aborts/commit: 3.21  correct: true
 (def ^:private re-impl-plain
   #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+correct:\s+(true|false)")
-(def ^:private re-impl-counted
-  #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+aborts/commit:\s+([\d.]+)\s+correct:\s+(true|false)")
 
-(def ^:private re-crit-label    #"^(.+?)\s*—\s*opusdb:\s*$")
+(def ^:private re-impl-full
+  #"^\s*opusdb\s+txns/sec:\s+(\d+)\s+conflict-aborts/commit:\s+([\d.]+)\s+trim-aborts/commit:\s+([\d.]+)\s+correct:\s+(true|false)")
 
-;; Criterium output can vary slightly between versions; \s* instead of fixed spaces
-(def ^:private re-crit-mean     #"Execution time mean\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-crit-std      #"Execution time std-deviation\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-crit-lower    #"Execution time lower quantile\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
-(def ^:private re-crit-upper    #"Execution time upper quantile\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-label  #"^(.+?)\s*—\s*opusdb:\s*$")
+(def ^:private re-crit-mean   #"Execution time mean\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-std    #"Execution time std-deviation\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-lower  #"Execution time lower quantile\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
+(def ^:private re-crit-upper  #"Execution time upper quantile\s*[:]?\s*([\d.]+)\s*(ns|µs|ms|sec)")
 
 (def ^:private re-bank-total    #"Total\s+\(should be\s+(\d+)\s*\):\s*(\d+)")
 (def ^:private re-bank-xfers    #"Successful transfers:\s*(\d+)")
-(def ^:private re-bank-scenario #"Benchmarking\s+(.+?):")
+(def ^:private re-bank-scenario #"^Benchmarking\s+(.+?):")
+
+(def ^:private re-history-sweep
+  #"^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s*$")
 
 (defn- parse-throughput-section [lines]
   (loop [[line & rest] lines
@@ -63,15 +61,15 @@
                    (conj (assoc cur-vals :threads cur-threads)))]
         (recur rest n {} acc'))
 
-      ;; Counted line (has aborts/commit) — must be tested before plain
-      ;; because plain regex would also match the prefix of a counted line.
-      (re-find re-impl-counted line)
-      (let [[_ tps aborts correct] (re-find re-impl-counted line)]
+      ;; Full line (conflict + trim aborts) — tested before plain
+      (re-find re-impl-full line)
+      (let [[_ tps ca ta correct] (re-find re-impl-full line)]
         (recur rest cur-threads
                (assoc cur-vals
-                      :opusdb          (->long tps)
-                      :aborts-per-commit (->double aborts)
-                      :correct?        (= correct "true"))
+                      :opusdb                     (->long tps)
+                      :conflict-aborts-per-commit (->double ca)
+                      :trim-aborts-per-commit     (->double ta)
+                      :correct?                   (= correct "true"))
                acc))
 
       (re-find re-impl-plain line)
@@ -85,9 +83,34 @@
       :else
       (recur rest cur-threads cur-vals acc))))
 
+(defn- parse-history-sweep [lines]
+  (reduce
+   (fn [acc line]
+     (if-let [[_ h n tps ca ta] (re-find re-history-sweep line)]
+       (conj acc {:max-history               (->long h)
+                  :threads                   (->long n)
+                  :txns-per-sec              (->long tps)
+                  :conflict-aborts-per-commit (->double ca)
+                  :trim-aborts-per-commit     (->double ta)})
+       acc))
+   []
+   lines))
+
 (defn- extract-time [re line]
   (when-let [[_ v u] (re-find re line)]
     (to-micros (->double v) u)))
+
+(defn- merge-timing [data line]
+  (reduce
+   (fn [d [k re]]
+     (if-let [v (extract-time re line)]
+       (assoc d k v)
+       d))
+   data
+   [[:mean  re-crit-mean]
+    [:std   re-crit-std]
+    [:lower re-crit-lower]
+    [:upper re-crit-upper]]))
 
 (defn- parse-criterium-blocks [lines]
   (loop [[line & rest] lines
@@ -108,16 +131,7 @@
         (recur rest label {} acc'))
 
       :else
-      (let [cur-data' (cond-> cur-data
-                        (extract-time re-crit-mean line)
-                        (assoc :mean  (extract-time re-crit-mean line))
-                        (extract-time re-crit-std line)
-                        (assoc :std   (extract-time re-crit-std line))
-                        (extract-time re-crit-lower line)
-                        (assoc :lower (extract-time re-crit-lower line))
-                        (extract-time re-crit-upper line)
-                        (assoc :upper (extract-time re-crit-upper line)))]
-        (recur rest cur-label cur-data' acc)))))
+      (recur rest cur-label (merge-timing cur-data line) acc))))
 
 (defn- parse-bank-blocks [lines]
   (loop [[line & rest] lines
@@ -150,12 +164,11 @@
         (recur rest label {} acc'))
 
       :else
-      (let [cur-data' (cond-> cur-data
-                        (extract-time re-crit-mean line)
-                        (assoc :mean (extract-time re-crit-mean line))
-                        (extract-time re-crit-std line)
-                        (assoc :std  (extract-time re-crit-std line)))]
-        (recur rest cur-scenario cur-data' acc)))))
+      (recur rest cur-scenario
+             (-> cur-data
+                 (as-> d (if-let [v (extract-time re-crit-mean line)] (assoc d :mean v) d))
+                 (as-> d (if-let [v (extract-time re-crit-std  line)] (assoc d :std  v) d)))
+             acc))))
 
 (defn- split-sections [lines]
   (loop [[line & rest] lines
@@ -183,11 +196,15 @@
 (defn parse-all [^String stdout]
   (let [lines    (str/split-lines stdout)
         sections (split-sections lines)]
-    {:throughput (some-> (get sections "Throughput Benchmarks")
-                         (update-vals parse-throughput-section))
-     :criterium  (some-> (get sections "Criterium Statistical Benchmarks")
-                         vals
-                         (->> (apply concat))
-                         vec
-                         parse-criterium-blocks)
-     :bank       (parse-bank-blocks lines)}))
+    {:throughput    (some-> (get sections "Throughput Benchmarks")
+                            (dissoc "Version History Size Sweep (bank transfer, 20 accounts)")
+                            (update-vals parse-throughput-section))
+     :history-sweep (some-> (get-in sections ["Throughput Benchmarks"
+                                              "Version History Size Sweep (bank transfer, 20 accounts)"])
+                            parse-history-sweep)
+     :criterium     (some-> (get sections "Criterium Statistical Benchmarks")
+                            vals
+                            (->> (apply concat))
+                            vec
+                            parse-criterium-blocks)
+     :bank          (parse-bank-blocks lines)}))

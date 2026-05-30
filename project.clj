@@ -26,10 +26,16 @@
                       "-XX:+UnlockDiagnosticVMOptions"
                       "-XX:+DebugNonSafepoints"]}
 
+   ;; Add :compilation profile on top of :bench to investigate whether
+   ;; the 4→6 thread throughput dip in the bank-transfer scenario
+   ;; coincides with a JIT recompilation event.
+   ;; Usage: lein with-profile bench,compilation run ... 2>compilation.log
+   :compilation {:jvm-opts ["-XX:+PrintCompilation"]}
+
    :jfr {:dependencies [[criterium "0.4.6"]]
          :jvm-opts ["-XX:+FlightRecorder"
                     "-XX:StartFlightRecording=name=stm,settings=profile,disk=true,filename=stm-bench.jfr"]}
-   
+
    :prod {:aot :all
           :jvm-opts ["-Dclojure.compiler.direct-linking=true"
                      "-XX:+UseG1GC"
