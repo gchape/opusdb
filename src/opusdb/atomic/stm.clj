@@ -177,28 +177,6 @@
   `(sync (fn* [] ~@body)))
 
 (defn deref [target-ref]
-  ;; Outside tx: current committed value. Inside: write-set → read-set → history snapshot.
-  (if-not *tx*
-    (:value @target-ref)
-    (let [tx                          *tx*
-          ^IdentityHashMap write-set  (:write-set tx)
-          ^IdentityHashMap read-set   (:read-set tx)]
-      (check-active! tx)
-      (cond
-        (.containsKey write-set target-ref)
-        (.get write-set target-ref)
-
-        (.containsKey read-set target-ref)
-        (:value (.get read-set target-ref))
-
-        :else
-        (let [snapshot (find-entry (:read-point tx) (:history @target-ref))]
-          ;; Ref created after our snapshot and history already trimmed — abort.
-          (when-not snapshot (abort))
-          (.put read-set target-ref snapshot)
-          (:value snapshot))))))
-
-(defn deref [target-ref]
   (if-not *tx*
     (:value @(:hot target-ref))
     (let [tx                         *tx*
