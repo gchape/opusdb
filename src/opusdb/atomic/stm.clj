@@ -8,28 +8,18 @@
    [java.util.concurrent.atomic AtomicLong]
    [java.util.concurrent ThreadLocalRandom]))
 
-(def ^:private max-history              32)
-(def ^{:dynamic true} *max-history*     max-history)
-(def ^{:dynamic true} *trim-abort-hook* nil)
-(def ^:private max-retries              96)
-(def ^:private base-sleep-ms            1)
-(def ^:private max-sleep-ms             32)
+(def ^:private max-history    16)
+(def ^:private max-retries    256)
+(def ^:private base-sleep-ms  1)
+(def ^:private max-sleep-ms   32)
+(def ^:private commit-lock    (Object.))
 
-(def ^:private commit-lock             (Object.))
-(def ^:private ^AtomicLong write-point (AtomicLong.))
-(def ^:private ^AtomicLong tx-counter  (AtomicLong.))
+(def ^:private ^AtomicLong write-point      (AtomicLong.))
+(def ^:private ^AtomicLong tx-counter       (AtomicLong.))
 (def ^:private ^ConcurrentHashMap active-tx (ConcurrentHashMap.))
 
 (def ^{:dynamic true} *tx* nil)
-
-(defn ref [initial-val]
-  (let [wp    (.get write-point)
-        entry {:value initial-val :write-point wp}]
-    {:hot  (atom {:value       initial-val
-                  :write-point wp
-                  :owner       nil})
-     :cold (atom [entry])
-     :lock (Object.)}))
+(def ^{:dynamic true} *trim-abort-hook* nil)
 
 (defn- make-tx [retry-count]
   (let [id (.incrementAndGet tx-counter)
@@ -48,140 +38,110 @@
   (let [retries (:retry-count current)]
     (when (>= retries max-retries)
       (throw (ex-info "STM exceeded max retries" {:retries retries})))
+    ;; Exponential backoff with ±25% jitter after 4 retries.
     (when (> retries 4)
-      (let [base   (min max-sleep-ms
-                        (bit-shift-left base-sleep-ms (min (- retries 4) 6)))
-            jitter (long (* base 0.25
-                            (- (* 2 (.nextDouble (ThreadLocalRandom/current))) 1)))]
+      (let [base   (min max-sleep-ms (bit-shift-left base-sleep-ms (min (- retries 4) 6)))
+            jitter (long (* base 0.25 (- (* 2 (.nextDouble (ThreadLocalRandom/current))) 1)))]
         (Thread/sleep (max 0 (long (+ base jitter))))))
     (make-tx (inc retries))))
 
 (defn- abort []
+  ;; Sentinel exception — caught by run-attempt to trigger a retry.
   (throw (ex-info "Transaction retry" {:type ::aborted})))
-
-(defn- check-active! [tx]
-  (when (= @(:status tx) ::aborted)
-    (abort)))
 
 (defmacro with-max-history [n & body]
   `(binding [*max-history* ~n]
      ~@body))
 
-(defn- find-entry [read-point ^clojure.lang.Atom cold-atom]
-  (let [history @cold-atom]
-    (loop [i (dec (count history))]
-      (when (>= i 0)
-        (let [entry (nth history i)]
-          (if (<= (:write-point entry) read-point)
-            entry
-            (recur (dec i))))))))
+(defn- check-active! [tx]
+  ;; Bail early if wait-die has already marked us aborted.
+  (when (= @(:status tx) ::aborted)
+    (abort)))
+
+(defn- find-entry [read-point history]
+  ;; Newest-first scan; returns the latest entry visible at read-point.
+  (loop [i (dec (count history))]
+    (when (>= i 0)
+      (let [entry (nth history i)]
+        (if (<= (:write-point entry) read-point)
+          entry
+          (recur (dec i)))))))
 
 (defn- trim-history [history]
-  (if (> (count history) *max-history*)
-    (subvec history (- (count history) *max-history*))
+  ;; Bound per-ref memory; dropping old versions only affects very long-lived readers.
+  (if (> (count history) max-history)
+    (vec (take-last max-history history))
     history))
 
+(defn ref [initial-val]
+  ;; Wraps value + version history + write-lock owner in a single atom.
+  (let [wp    (.get write-point)
+        entry {:value initial-val :write-point wp}]
+    (atom {:value       initial-val
+           :write-point wp
+           :history     [entry]
+           :owner       nil
+           :lock        (Object.)})))
+
 (defn- try-acquire! [target-ref tx]
+  ;; Claims write ownership under the ref's own lock (not commit-lock).
+  ;; Wait-die: younger tx (higher ID) preempts the owner; older tx yields.
   (let [claimer-id (:id tx)
-        lock       (:lock target-ref)]
+        lock       (:lock @target-ref)]
     (monitor-enter lock)
     (try
-      (let [owner-id (:owner @(:hot target-ref))]
+      (let [owner-id (:owner @target-ref)]
         (cond
           (nil? owner-id)
-          (do (swap! (:hot target-ref) assoc :owner claimer-id) true)
+          (do (swap! target-ref assoc :owner claimer-id) true)
 
           (= owner-id claimer-id)
           true
 
+          ;; We're younger — preempt the owner and steal the ref.
           (> claimer-id owner-id)
           (do (when-some [owner-tx (.get active-tx owner-id)]
                 (when (= @(:status owner-tx) ::active)
                   (vreset! (:status owner-tx) ::aborted)))
-              (swap! (:hot target-ref) assoc :owner claimer-id)
+              (swap! target-ref assoc :owner claimer-id)
               true)
 
-          :else false))
+          :else false)) ; we're older — yield, let the younger owner finish
       (finally
         (monitor-exit lock)))))
 
-;; ---------------------------------------------------------------------------
-;; Commit path
-;;
-;; CHANGE: write-point is incremented *before* acquiring commit-lock.
-;;
-;; Original order:
-;;   locking commit-lock
-;;     → validate-reads!
-;;     → (.incrementAndGet write-point)   ; inside lock
-;;     → swap! each ref's combined atom   ; inside lock, allocates big map
-;;
-;; New order:
-;;   locking commit-lock
-;;     → validate-reads!
-;;     → (.incrementAndGet write-point)   ; still inside lock — see note
-;;   (outside lock)
-;;     → swap! hot-atom  (small: 3 fields)
-;;     → swap! cold-atom (append to history)
-;;
-;; NOTE on write-point placement: moving the increment outside the lock
-;; would allow two transactions to claim the same commit-point if they
-;; race between the increment and their respective hot-atom CASes, which
-;; would break the version ordering guarantee that find-entry relies on.
-;; It therefore stays inside the lock.  What we *do* move outside is the
-;; per-ref atom work, which was the dominant source of cache pressure.
-;;
-;; The two swap! calls after the lock are now uncontended — no other
-;; thread can be modifying the same ref's atoms at that moment because
-;; ownership (try-acquire!) was already established exclusively, and the
-;; new owner is us.  A concurrent reader doing find-entry on cold-atom
-;; will see either the pre-commit or the post-commit history vector
-;; atomically (atoms are volatile reads), which is safe because the
-;; reader's read-point predates our commit-point.
-;; ---------------------------------------------------------------------------
 (defn- validate-reads! [^IdentityHashMap read-set]
-  ;; Hot-atom carries :write-point; no change needed here.
+  ;; Called inside commit-lock; aborts if any read ref was written since our snapshot.
   (doseq [[r entry] read-set]
-    (when (> (:write-point @(:hot r)) (:write-point entry))
+    (when (> (:write-point @r) (:write-point entry))
       (abort))))
 
-
-(defn- apply-writes-hot! [^IdentityHashMap write-set commit-point]
-  (doseq [[r new-val] write-set]
-    (swap! (:hot r)
-           (fn [s]
-             (assoc s
-                    :value       new-val
-                    :write-point commit-point
-                    :owner       nil)))))
-
-(defn- apply-writes-cold! [^IdentityHashMap write-set commit-point]
-  (doseq [[r new-val] write-set]
-    (swap! (:cold r)
-           (fn [history]
-             (trim-history
-              (conj history {:value       new-val
-                             :write-point commit-point}))))))
+(defn- apply-writes! [^IdentityHashMap write-set]
+  ;; Advance write-point once, then stamp all writes with that commit-point.
+  (let [commit-point (.incrementAndGet write-point)]
+    (doseq [[r new-val] write-set]
+      (swap! r (fn [{:keys [history] :as state}]
+                 (assoc state
+                        :value       new-val
+                        :write-point commit-point
+                        :owner       nil
+                        :history     (trim-history
+                                      (conj history
+                                            {:value       new-val
+                                             :write-point commit-point}))))))))
 
 (defn- commit! [tx]
   (check-active! tx)
   (let [{:keys [id read-set write-set status]} tx]
-    (if (seq write-set)
-      (let [commit-point
-            (locking commit-lock
-              (check-active! tx)
-              (validate-reads! read-set)
-              (let [cp (.incrementAndGet write-point)]
-                (apply-writes-hot! write-set cp)
-                cp))]
-        (apply-writes-cold! write-set commit-point)
-        (vreset! status ::committed)
-        (.remove active-tx id)
-        (tx/commit! id))
-      (do
-        (vreset! status ::committed)
-        (.remove active-tx id)
-        (tx/commit! id)))))
+    ;; Read-only txs skip the commit-lock entirely.
+    (when (seq write-set)
+      (locking commit-lock
+        (check-active! tx)
+        (validate-reads! read-set)
+        (apply-writes! write-set)))
+    (vreset! status ::committed)
+    (.remove active-tx id)
+    (tx/commit! id)))
 
 (defn- run-attempt [tx body-fn]
   (try
@@ -190,6 +150,7 @@
         (commit! tx)
         [:ok result]))
     (catch clojure.lang.ExceptionInfo ex
+      ;; ::aborted is ours — retry. All other ExceptionInfo propagates.
       (if (= (:type (ex-data ex)) ::aborted)
         [:abort nil]
         [:exception ex]))
@@ -207,12 +168,35 @@
                        (throw value))))))
 
 (defn sync [body-fn]
+  ;; Already in a tx — participate directly; STM transactions are flat.
   (if *tx*
     (body-fn)
     (run-tx body-fn)))
 
 (defmacro dosync [& body]
   `(sync (fn* [] ~@body)))
+
+(defn deref [target-ref]
+  ;; Outside tx: current committed value. Inside: write-set → read-set → history snapshot.
+  (if-not *tx*
+    (:value @target-ref)
+    (let [tx                          *tx*
+          ^IdentityHashMap write-set  (:write-set tx)
+          ^IdentityHashMap read-set   (:read-set tx)]
+      (check-active! tx)
+      (cond
+        (.containsKey write-set target-ref)
+        (.get write-set target-ref)
+
+        (.containsKey read-set target-ref)
+        (:value (.get read-set target-ref))
+
+        :else
+        (let [snapshot (find-entry (:read-point tx) (:history @target-ref))]
+          ;; Ref created after our snapshot and history already trimmed — abort.
+          (when-not snapshot (abort))
+          (.put read-set target-ref snapshot)
+          (:value snapshot))))))
 
 (defn deref [target-ref]
   (if-not *tx*
@@ -241,6 +225,7 @@
     (throw (IllegalStateException. "ref-set outside transaction")))
   (let [tx *tx*]
     (check-active! tx)
+    ;; Acquire before buffering; yields if wait-die determines we're older.
     (when-not (try-acquire! target-ref tx)
       (abort))
     (.put ^IdentityHashMap (:write-set tx) target-ref new-val)
@@ -250,11 +235,13 @@
   (ref-set target-ref (apply f (deref target-ref) args)))
 
 (defn on-commit [handler]
+  ;; Side-effect guaranteed to run once, after commit — safe for LongAdder etc.
   (if *tx*
     (tx/on-commit (:id *tx*) handler)
     (throw (IllegalStateException. "on-commit outside transaction"))))
 
 (defn on-rollback [handler]
+  ;; Cleanup hook run on abort or retry.
   (if *tx*
     (tx/on-rollback (:id *tx*) handler)
     (throw (IllegalStateException. "on-rollback outside transaction"))))

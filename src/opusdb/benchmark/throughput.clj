@@ -118,8 +118,8 @@
            (dotimes [_ n-ops]
              (if (< (.nextDouble tlr) write-ratio)
                (do (.increment total-writes)
-                   (stm/dosync
-                    (stm/alter (nth refs (.nextInt tlr n-refs-int)) inc)))
+                   (counting-dosync
+                    #(stm/alter (nth refs (.nextInt tlr n-refs-int)) inc)))
                (do (.increment total-reads)
                    (stm/dosync (reduce + (mapv stm/deref refs))))))))
         elapsed   (timed (.countDown gate) (join-all threads))
